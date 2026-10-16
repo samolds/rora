@@ -12,17 +12,19 @@ PY="${PYTHON:-$(command -v python3.12 || command -v python3)}"
 mkdir -p img/in img/out
 
 echo "Downloading model weights into ./models (about 1.2 GB, first time only)..."
-.venv/bin/python -W ignore - <<'PY'
+HF_HUB_OFFLINE=0 .venv/bin/python -W ignore - <<'PY'
 import env  # keeps downloads inside ./models
 import logging
 logging.basicConfig(level=logging.INFO, format="  %(message)s")
 from segment import DogSegmenter
 import edgemaps
 import features
+import depth
 DogSegmenter(device="cpu")
 for name in edgemaps.ML_MODELS:
     edgemaps.load_model(name, "cpu")
 features.FeatureFinder("cpu")
+depth.load_model("cpu")
 PY
 
 echo

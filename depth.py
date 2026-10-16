@@ -66,11 +66,39 @@ def form_map(depth: np.ndarray, mask: np.ndarray) -> np.ndarray:
     gx, gy = cv2.Sobel(d, cv2.CV_32F, 1, 0), cv2.Sobel(d, cv2.CV_32F, 0, 1)
     jump = np.hypot(gx, gy)
     bend = np.abs(cv2.Laplacian(cv2.GaussianBlur(d, (0, 0), max(1.0, 0.01 * size)), cv2.CV_32F))
+    # stay clear of the silhouette, where depth drops to the (masked-out) background
+    r = max(3, int(0.02 * size))
     inner = cv2.erode(mask.astype(np.uint8),
-                      cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))).astype(bool)
+                      cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1))).astype(bool)
 
     def norm(m):
         hi = np.percentile(m[inner], 99) if inner.any() else m.max()
         return np.clip(m / max(hi, 1e-6), 0, 1)
 
     return (np.maximum(norm(jump), 0.6 * norm(bend)) * inner).astype(np.float32)
+
+
+def form_strokes(form: np.ndarray, mask: np.ndarray, count: int, exclude: np.ndarray | None,
+                 coverage: float = 0.04) -> list[np.ndarray]:
+    """The `count` strongest, longest form lines, as smooth polylines."""
+    import cleanup
+    import strokes
+    from skimage.morphology import skeletonize
+
+    if count <= 0:
+        return []
+    size = float(np.sqrt(mask.sum()))
+    vals = form[mask]
+    thr = max(0.25, float(np.percentile(vals, 100 * (1 - coverage)))) if vals.size else 1.0
+    skel = skeletonize(form > thr)
+    paths = [q for q in strokes.trace(skel) if strokes.path_length(q) >= 0.01 * size]
+    paths = strokes.join_paths(paths, gap=0.012 * size)
+    paths = [strokes.smooth(q, 0.004 * size) for q in paths]
+    paths = [q for q in paths if strokes.path_length(q) >= 0.06 * size]
+    # lines hugging the silhouette are just the body curving away (a "double outline")
+    r = int(0.035 * size)
+    near_edge = ~cv2.erode(mask.astype(np.uint8),
+                           cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1))).astype(bool)
+    exclude = near_edge if exclude is None else (exclude | near_edge)
+    paths = cleanup.clip_paths(paths, ~exclude, 0.05 * size)
+    return strokes.rank(paths, form, count, min_score=0.05)

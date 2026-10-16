@@ -10,6 +10,7 @@ import cv2
 import numpy as np
 
 import cleanup
+import depth
 import edgemaps
 import facedraw
 import features
@@ -21,11 +22,14 @@ log = logging.getLogger(__name__)
 
 PASS2 = dict(min_votes=3.5, tolerance=6, coverage=0.06, edge_band=12, min_length=50,
              join_gap=14, smooth=2.5, max_strokes=-1, min_score=0.05, max_blobs=0, darkness=0.15,
-             freedom=0.7, features=1, head_strokes=-1, nose_solid=0, almond_eyes=0, pupils=0)
+             freedom=0.7, features=1, head_strokes=-1, nose_solid=0, almond_eyes=0, pupils=0,
+             form_lines=-1)
 NAMES: list[str] = []
 
 # Priority: the outline and face features are always drawn. --detail only sets how many
-# extra lines are added: body lines (legs, ears, folds) and secondary head lines (brow, muzzle).
+# extra lines are added: form lines from depth (overlaps like leg-over-chest, which give
+# volume), body lines (legs, ears, folds) and secondary head lines (brow, muzzle).
+FORM_LINES_AT_FULL_DETAIL = 10
 BODY_STROKES_AT_FULL_DETAIL = 24
 HEAD_STROKES_AT_FULL_DETAIL = 10
 
@@ -78,6 +82,8 @@ def get_strokes(rgb, mask, p):
         q["max_strokes"] = floor + round(BODY_STROKES_AT_FULL_DETAIL * p["detail"])
     if q["head_strokes"] < 0:
         q["head_strokes"] = round(HEAD_STROKES_AT_FULL_DETAIL * p["detail"])
+    if q["form_lines"] < 0:
+        q["form_lines"] = round(FORM_LINES_AT_FULL_DETAIL * p["detail"])
     skey = ("strokes", tuple(sorted(q.items())))
     if skey not in _cache:
         size = cleanup.dog_size(mask)
@@ -92,6 +98,13 @@ def get_strokes(rgb, mask, p):
             inner = inner + head
         else:
             inner, outline, blobs, _ = strokes.extract(_cache["maps"], mask, rgb, q)
+        if q["form_lines"] > 0:
+            if "form" not in _cache:
+                _cache["form"] = depth.form_map(depth.estimate(rgb, mask, device), mask)
+            form = depth.form_strokes(_cache["form"], mask, q["form_lines"],
+                                      exclude=zone if face is not None else None)
+            log.info("  form lines: %d from depth", len(form))
+            inner = form + inner  # listed first so ties in duplicate removal favour form lines
         inner, outline, blobs = cleanup.refine(inner, outline, blobs, mask, q["freedom"])
         if face is not None:
             inner = cleanup.clip_paths(inner, ~zone, 0.02 * size)  # smoothing may drift into features

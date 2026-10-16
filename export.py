@@ -1,9 +1,10 @@
 """Turn an ink mask into print-ready files: transparent PNG, traced SVG, preview sheet."""
+import html
 from pathlib import Path
 
 import cv2
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, PngImagePlugin, PngImagePlugin
 
 COLORS = {"white": (255, 255, 255), "black": (0, 0, 0)}
 
@@ -41,13 +42,18 @@ def to_rgba(ink: np.ndarray, color: str, antialias: bool) -> Image.Image:
     return Image.fromarray(rgba, "RGBA")
 
 
-def save_png(ink, path: Path, color: str, antialias: bool, dpi: int) -> Image.Image:
+def save_png(ink, path: Path, color: str, antialias: bool, dpi: int,
+             settings: str | None = None) -> Image.Image:
     img = to_rgba(ink, color, antialias)
-    img.save(path, dpi=(dpi, dpi))
+    info = PngImagePlugin.PngInfo()
+    if settings:
+        info.add_text("dog_lineart_settings", settings)
+    img.save(path, dpi=(dpi, dpi), pnginfo=info)
     return img
 
 
-def save_svg(ink: np.ndarray, path: Path, color: str, simplify: float = 0.8) -> int:
+def save_svg(ink: np.ndarray, path: Path, color: str, simplify: float = 0.8,
+             settings: str | None = None) -> int:
     """Trace the ink mask into filled paths (holes kept via even-odd fill). Returns path count."""
     contours, _ = cv2.findContours(ink.astype(np.uint8), cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
     parts = []
@@ -59,9 +65,10 @@ def save_svg(ink: np.ndarray, path: Path, color: str, simplify: float = 0.8) -> 
         parts.append("M" + "L".join(f"{x},{y}" for x, y in pts) + "Z")
     h, w = ink.shape
     hex_color = "#%02x%02x%02x" % COLORS[color]
+    desc = f"<desc>{html.escape(settings)}</desc>\n" if settings else ""
     path.write_text(
         f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}" width="{w}" height="{h}">\n'
-        f'<path fill="{hex_color}" fill-rule="evenodd" d="{"".join(parts)}"/>\n</svg>\n'
+        f'{desc}<path fill="{hex_color}" fill-rule="evenodd" d="{"".join(parts)}"/>\n</svg>\n'
     )
     return len(parts)
 

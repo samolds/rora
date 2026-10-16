@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Photo of a dog -> transparent PNG line art (for printing on shirts)."""
 import argparse
+import hashlib
+import json
 import logging
 import sys
 import time
@@ -18,6 +20,29 @@ from segment import DogSegmenter, load_image
 log = logging.getLogger("dog_lineart")
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".heic", ".webp", ".tif", ".tiff"}
 
+# Default --set values; any --set KEY=VALUE on the command line overrides these.
+# They tune the tattoo looks (fineline, brush, ...) and are ignored by styles that don't use them.
+DEFAULT_SETTINGS = {"max_strokes": 50, "head_strokes": 100, "form_lines": 100,
+                    "min_votes": 2.5, "coverage": 0.1, "min_score": 0, "freedom": 0.4}
+
+# command-line options that change the output image (others, like --svg, don't)
+OUTPUT_OPTIONS = ("color", "size", "dpi", "pad", "min_speck", "outline", "antialias",
+                  "work_size", "min_conf", "detector", "segmenter")
+
+
+def settings_id(name: str, overrides: dict, args) -> tuple[str, str]:
+    """(filename tag, full settings JSON) for one style. Only settings the style actually
+    uses count, so the same effective settings always map to the same file name."""
+    style = styles.STYLES[name]
+    used = {k: v for k, v in {**style.defaults, **overrides}.items()
+            if k in style.defaults or k == "invert"}
+    full = {"style": name, **used, **{k: getattr(args, k) for k in OUTPUT_OPTIONS}}
+    full = {k: float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else v
+            for k, v in full.items()}  # so 1 and 1.0 hash the same
+    text = json.dumps(full, sort_keys=True)
+    digest = hashlib.sha1(text.encode()).hexdigest()[:6]
+    return f"d{full['detail']:g}_{digest}", text
+
 
 def parse_args(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
@@ -27,12 +52,13 @@ def parse_args(argv=None):
     ap.add_argument("--list-styles", action="store_true", help="show styles and their settings")
 
     g = ap.add_argument_group("style")
-    g.add_argument("-s", "--style", nargs="+", default=["fineline"],
-                   help="one or more style names, 'tattoo' (all tattoo looks) or 'all'")
-    g.add_argument("--detail", type=float, help="0 (simple) .. 1 (busy)")
+    g.add_argument("-s", "--style", nargs="+", default=["edges"],
+                   help="one or more style names, 'tattoo' (all tattoo looks) or 'all' (default: edges)")
+    g.add_argument("--detail", type=float, default=0.5, help="0 (simple) .. 1 (busy), default 0.5")
     g.add_argument("--weight", type=int, help="line weight in px")
     g.add_argument("--set", action="append", default=[], metavar="KEY=VALUE",
-                   help="override any style setting, e.g. --set threshold=0.45")
+                   help="override any style setting, e.g. --set threshold=0.45 (defaults: "
+                        + " ".join(f"{k}={v}" for k, v in DEFAULT_SETTINGS.items()) + ")")
     g.add_argument("--invert", action="store_true",
                    help="flip tonal styles (ink where the dog is dark)")
 
@@ -45,7 +71,8 @@ def parse_args(argv=None):
     g.add_argument("--outline", type=int, default=0, help="add a silhouette outline this wide (px)")
     g.add_argument("--antialias", action="store_true", help="soft edges (hard by default)")
     g.add_argument("--svg", action="store_true", help="also write traced .svg files")
-    g.add_argument("--preview", action="store_true", help="write _preview.png contact sheet")
+    g.add_argument("--preview", action=argparse.BooleanOptionalAction, default=True,
+                   help="write _preview.png contact sheet (default: on)")
     g.add_argument("--debug", action="store_true", help="save mask and cut-out per photo")
 
     g = ap.add_argument_group("detection")
@@ -59,7 +86,7 @@ def parse_args(argv=None):
 
 
 def parse_overrides(args) -> dict:
-    out = {}
+    out = dict(DEFAULT_SETTINGS)
     for item in args.set:
         key, _, value = item.partition("=")
         try:
@@ -119,6 +146,13 @@ def main(argv=None) -> int:
     overrides = parse_overrides(args)
     files = collect_images(args.inputs)
     log.info("%d photo(s), style(s): %s, overrides: %s", len(files), names, overrides or "none")
+    ids = {n: settings_id(n, overrides, args) for n in names}
+    for n, (tag, text) in ids.items():
+        log.info("  %s -> *_%s_%s.png  %s", n, n, tag, text)
+    used_keys = {k for n in names for k in styles.STYLES[n].defaults} | {"invert"}
+    ignored = sorted({s.partition("=")[0] for s in args.set} - used_keys)
+    if ignored:
+        log.warning("  --set %s not used by style(s) %s", ", ".join(ignored), names)
     if not files:
         return 1
 
@@ -139,13 +173,13 @@ def main(argv=None) -> int:
                 continue
 
             for d_i, dog in enumerate(dogs, 1):
-                tag = "" if d_i == 1 else f"_dog{d_i}"
+                dog_tag = "" if d_i == 1 else f"_dog{d_i}"
                 if args.debug:
                     cut = rgb.copy()
                     cut[~dog.mask] = 0
-                    cv2.imwrite(str(args.out / f"{path.stem}{tag}_debug_mask.png"),
+                    cv2.imwrite(str(args.out / f"{path.stem}{dog_tag}_debug_mask.png"),
                                 dog.mask.astype(np.uint8) * 255)
-                    cv2.imwrite(str(args.out / f"{path.stem}{tag}_debug_cutout.jpg"),
+                    cv2.imwrite(str(args.out / f"{path.stem}{dog_tag}_debug_cutout.jpg"),
                                 cv2.cvtColor(cut, cv2.COLOR_RGB2BGR))
 
                 for name in names:
@@ -156,12 +190,14 @@ def main(argv=None) -> int:
                     ink = export.despeckle(ink, args.min_speck)
                     ink = export.crop_and_resize(ink, dog.mask, args.pad, args.size)
 
-                    stem = f"{path.stem}{tag}_{name}"
+                    tag, settings = ids[name]
+                    stem = f"{path.stem}{dog_tag}_{name}_{tag}"
                     img = export.save_png(ink, args.out / f"{stem}.png", args.color,
-                                          args.antialias, args.dpi)
+                                          args.antialias, args.dpi, settings)
                     msg = f"  {name}: {stem}.png {img.width}x{img.height}"
                     if args.svg:
-                        n = export.save_svg(ink, args.out / f"{stem}.svg", args.color)
+                        n = export.save_svg(ink, args.out / f"{stem}.svg", args.color,
+                                            settings=settings)
                         msg += f" + .svg ({n} paths)"
                     log.info("%s, ink %.0f%% (%.1fs)", msg, 100 * ink.mean(),
                              time.perf_counter() - t)
