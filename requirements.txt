@@ -1,0 +1,7 @@
+ultralytics>=8.3.0
+torch>=2.3
+opencv-python>=4.9
+numpy>=1.26
+Pillow>=10.0
+controlnet-aux>=0.0.10
+scikit-image>=0.22

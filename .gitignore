@@ -1,0 +1,25 @@
+# OS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info
+.venv/
+
+# Model weights and caches (downloaded by ./setup.sh or on first run)
+models/
+*.pt
+*.pth
+# Ultralytics may create these in the working directory
+runs/
+datasets/
+
+# Style-tuning workbench (scratch scripts + cached test cut-outs)
+lab/
+
+# Personal photos and generated output (1.jpg is kept as a demo; it has no GPS metadata)
+img/in/*
+!img/in/1.jpg
+img/example_out/
+img/out/
