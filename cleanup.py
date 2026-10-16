@@ -83,6 +83,20 @@ def runs(keep: np.ndarray) -> list[tuple[int, int]]:
     return list(zip(edges[::2], edges[1::2]))
 
 
+def clip_paths(paths: list[np.ndarray], keep: np.ndarray, min_len: float) -> list[np.ndarray]:
+    """Keep only the parts of each stroke that lie where `keep` is True."""
+    h, w = keep.shape
+    out = []
+    for q in paths:
+        xi = np.clip(np.round(q[:, 0]).astype(int), 0, w - 1)
+        yi = np.clip(np.round(q[:, 1]).astype(int), 0, h - 1)
+        for a, b in runs(keep[yi, xi]):
+            piece = q[a:b]
+            if len(piece) > 2 and path_length(piece) >= min_len:
+                out.append(piece)
+    return out
+
+
 def drop_frame_edges(outline: list, shape, margin: float) -> list:
     """Remove outline parts that just trace the photo border (dog cut off by the frame)."""
     h, w = shape

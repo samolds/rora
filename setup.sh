@@ -11,16 +11,18 @@ PY="${PYTHON:-$(command -v python3.12 || command -v python3)}"
 .venv/bin/pip install -r requirements.txt
 mkdir -p img/in img/out
 
-echo "Downloading model weights into ./models (about 550 MB, first time only)..."
+echo "Downloading model weights into ./models (about 1.2 GB, first time only)..."
 .venv/bin/python -W ignore - <<'PY'
 import env  # keeps downloads inside ./models
 import logging
 logging.basicConfig(level=logging.INFO, format="  %(message)s")
 from segment import DogSegmenter
 import edgemaps
+import features
 DogSegmenter(device="cpu")
 for name in edgemaps.ML_MODELS:
     edgemaps.load_model(name, "cpu")
+features.FeatureFinder("cpu")
 PY
 
 echo

@@ -12,7 +12,9 @@ import env
 
 log = logging.getLogger(__name__)
 
-COCO_DOG = 16
+COCO_CAT, COCO_DOG = 15, 16
+# lying or curled-up dogs are often labelled "cat"; these photos are assumed to be of dogs
+ANIMAL_CLASSES = [COCO_CAT, COCO_DOG]
 
 
 @dataclass
@@ -82,12 +84,14 @@ class DogSegmenter:
         bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
 
         t = time.perf_counter()
-        det = self.detector(bgr, classes=[COCO_DOG], conf=self.min_conf,
+        det = self.detector(bgr, classes=ANIMAL_CLASSES, conf=self.min_conf, agnostic_nms=True,
                             device=self.device, verbose=False)[0]
         boxes = det.boxes.xyxy.cpu().numpy().astype(int).tolist()
         scores = det.boxes.conf.cpu().numpy().tolist()
+        labels = [det.names[int(c)] for c in det.boxes.cls.cpu().numpy()]
         log.info("  detect: %d dog(s) %s in %.1fs", len(boxes),
-                 [round(s, 2) for s in scores], time.perf_counter() - t)
+                 [f"{s:.2f}" + (" (as cat)" if lab == "cat" else "") for s, lab in zip(scores, labels)],
+                 time.perf_counter() - t)
         if not boxes:
             return []
 

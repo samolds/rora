@@ -8,6 +8,8 @@ import cv2
 import numpy as np
 from skimage.morphology import skeletonize
 
+import cleanup
+
 log = logging.getLogger(__name__)
 
 WEIGHTS = {"xdog": 1.0, "canny": 1.0, "regions": 0.5, "hed": 1.0, "pidinet": 1.0,
@@ -96,7 +98,7 @@ def rank(paths: list[np.ndarray], votes: np.ndarray, max_strokes: int,
     order = np.argsort(scores)[::-1]
     best = scores[order[0]]
     keep = [i for i in order if scores[i] >= min_score * best]
-    if max_strokes:
+    if max_strokes is not None and max_strokes >= 0:
         keep = keep[:int(max_strokes)]
     return [paths[i] for i in keep]
 
@@ -118,27 +120,59 @@ def smooth(p: np.ndarray, sigma: float, closed: bool = False) -> np.ndarray:
 
 
 def join_paths(paths: list[np.ndarray], gap: float) -> list[np.ndarray]:
-    """Greedily join paths whose endpoints are within `gap`, so strokes run longer."""
-    paths = [p for p in paths]
-    merged = True
-    while merged:
-        merged = False
-        for i in range(len(paths)):
-            for j in range(i + 1, len(paths)):
-                a, b = paths[i], paths[j]
-                pairs = [(a[-1], b[0], a, b), (a[-1], b[-1], a, b[::-1]),
-                         (a[0], b[-1], b, a), (a[0], b[0], b[::-1], a)]
-                for e1, e2, first, second in pairs:
-                    if np.linalg.norm(e1 - e2) < gap:
-                        paths[i] = np.concatenate([first, second])
-                        paths.pop(j)
-                        merged = True
-                        break
-                if merged:
-                    break
-            if merged:
+    """Greedily join paths whose endpoints are within `gap`, so strokes run longer.
+
+    Closest endpoint pairs are joined first; each path end is used at most once.
+    """
+    from scipy.spatial import cKDTree
+
+    n = len(paths)
+    if n < 2:
+        return list(paths)
+    # endpoint k belongs to path k // 2; even k = start, odd k = end
+    ends = np.array([pt for p in paths for pt in (p[0], p[-1])], np.float32)
+    pairs = cKDTree(ends).query_pairs(gap, output_type="ndarray")
+    pairs = pairs[pairs[:, 0] // 2 != pairs[:, 1] // 2]
+    dist = np.linalg.norm(ends[pairs[:, 0]] - ends[pairs[:, 1]], axis=1)
+
+    parent = list(range(n))  # union-find over paths, to avoid closing loops
+
+    def root(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    partner = {}
+    for a, b in pairs[np.argsort(dist)]:
+        if a in partner or b in partner or root(a // 2) == root(b // 2):
+            continue  # endpoint already used, or joining would close a loop
+        partner[a], partner[b] = b, a
+        parent[root(a // 2)] = root(b // 2)
+
+    out, seen = [], set()
+    for start_path in range(n):
+        if start_path in seen:
+            continue
+        # walk to one free end of this chain, then traverse it
+        path, end = start_path, 2 * start_path
+        while end in partner:
+            other = partner[end]
+            path, end = other // 2, other ^ 1
+            if path == start_path:
                 break
-    return paths
+        chain, cur_path, entry = [], path, end
+        while True:
+            seen.add(cur_path)
+            p = paths[cur_path]
+            chain.append(p[::-1] if entry % 2 == 1 else p)
+            exit_end = entry ^ 1
+            if exit_end not in partner:
+                break
+            nxt = partner[exit_end]
+            cur_path, entry = nxt // 2, nxt
+        out.append(np.concatenate(chain))
+    return out
 
 
 def feature_blobs(rgb: np.ndarray, mask: np.ndarray, votes: np.ndarray, max_blobs: int,
@@ -192,8 +226,12 @@ def silhouette_paths(mask: np.ndarray, sigma: float) -> list[np.ndarray]:
     return out
 
 
-def extract(maps: dict, mask: np.ndarray, rgb: np.ndarray, p: dict) -> tuple[list, list, list, dict]:
-    """Returns (interior strokes, silhouette strokes, filled feature blobs, debug images)."""
+def extract(maps: dict, mask: np.ndarray, rgb: np.ndarray, p: dict,
+            exclude: np.ndarray | None = None) -> tuple[list, list, list, dict]:
+    """Returns (interior strokes, silhouette strokes, filled feature blobs, debug images).
+
+    Strokes inside `exclude` are cut away before ranking, so they don't use up the budget.
+    """
     t = time.perf_counter()
     s = max(mask.shape) / 2500
     keep, votes = consensus(maps, mask, p["min_votes"], max(2, int(p["tolerance"] * s)),
@@ -206,6 +244,8 @@ def extract(maps: dict, mask: np.ndarray, rgb: np.ndarray, p: dict) -> tuple[lis
     paths = join_paths(paths, gap=p["join_gap"] * s)
     paths = [smooth(q, p["smooth"] * s) for q in paths]
     paths = [q for q in paths if path_length(q) >= min_len]
+    if exclude is not None:
+        paths = cleanup.clip_paths(paths, ~exclude, min_len)
     paths = rank(paths, votes, p["max_strokes"], p["min_score"])
     paths = [cv2.approxPolyDP(q.reshape(-1, 1, 2), 0.6 * s, False)[:, 0, :].astype(np.float32)
              for q in paths]

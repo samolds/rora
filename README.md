@@ -8,7 +8,7 @@ in one of several styles, including minimalist tattoo-style line art.
 
 ## Getting started
 
-Requires Python 3.10+ (tested with 3.12) and about 2 GB of disk for dependencies and models.
+Requires Python 3.10+ (tested with 3.12) and about 3 GB of disk for dependencies and models.
 Works on macOS (Apple GPU), Linux/Windows (CUDA GPU) or plain CPU.
 
 ```sh
@@ -37,7 +37,8 @@ python dog_lineart.py img/in/1.jpg -s fineline brush dotwork --preview
 python dog_lineart.py img/in -s tattoo --svg --preview
 
 # fewer / more lines, cleaner / more literal lines
-python dog_lineart.py img/in/1.jpg -s fineline --detail 0.2
+python dog_lineart.py img/in/1.jpg -s fineline --detail 0      # just outline + face
+python dog_lineart.py img/in/1.jpg -s fineline --detail 0.6
 python dog_lineart.py img/in/1.jpg -s fineline --set freedom=0.9
 
 # black ink for light shirts
@@ -72,14 +73,23 @@ features (eyes, nose, mouth, ears, feet) with no shading.
 ## How the tattoo styles work
 
 1. **Find the dog**: YOLO detects each dog, SAM 2 cuts it out (one output file per dog).
-2. **Pass 1, many drawings**: the dog is drawn 7 different ways (classic edge filters plus
-   pretrained line-art models). They disagree about fur but agree about real features.
-3. **Pass 2, vote**: only lines most drawings agree on are kept, traced into strokes,
-   and ranked; `--detail` sets how many survive.
-4. **Pass 3, artistic cleanup**: strokes are smoothed into flowing curves, the outline is
+2. **Find the face**: OWLv2 finds the head, then the eyes, nose and mouth in a zoomed-in
+   crop; SAM 2 traces each one's exact shape.
+3. **Pass 1, many drawings**: the dog (and, separately, the zoomed-in head) is drawn 7
+   different ways (classic edge filters plus pretrained line-art models). They disagree
+   about fur but agree about real features.
+4. **Pass 2, vote**: only lines most drawings agree on are kept, traced into strokes,
+   and ranked.
+5. **Pass 3, artistic cleanup**: strokes are smoothed into flowing curves, the outline is
    simplified (fur tufts removed), and clutter is removed. `--set freedom=0..1` controls how
    far it may stylise away from the photo.
-5. **Draw**: the same strokes are rendered in each line look.
+6. **Draw**: the eyes (traced shape + pupil + highlight), nose (shape + nostrils) and mouth
+   (lip line) are drawn deliberately, then everything is rendered in each line look.
+   `--set almond_eyes=1` uses a stylised almond eye shape instead.
+
+The outline and face are always drawn. `--detail` only controls the extra lines:
+`--detail 0` is just outline + face, `--detail 1` adds legs, ear edges, folds, brow and muzzle.
+`--set features=0` turns face finding off (lines then come from pass 2 alone).
 
 ## Project layout
 
@@ -87,6 +97,7 @@ features (eyes, nose, mouth, ears, feet) with no shading.
 |---|---|
 | `dog_lineart.py` | command-line entry point |
 | `segment.py` | dog detection and cut-out |
+| `features.py`, `facedraw.py` | find and draw eyes, nose, mouth |
 | `edgemaps.py`, `strokes.py`, `cleanup.py` | tattoo passes 1, 2 and 3 |
 | `tattoo.py`, `styles.py` | line looks and other styles |
 | `export.py` | PNG / SVG / preview output |
