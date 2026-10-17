@@ -10,8 +10,8 @@ in one of several styles, including minimalist tattoo-style line art.
 
 ```
 for d in 0.1 0.3 0.5 0.8 1; do
-  #.venv/bin/python dog_lineart.py img/in -s edges ink noir outline sketch stencil stipple --detail $d --weight 1 --no-preview
   .venv/bin/python dog_lineart.py img/in -s edges ink noir outline sketch stencil stipple --detail $d --no-preview
+  .venv/bin/python dog_lineart.py img/in -s edges --detail $d --weight 1 --no-preview
 done
 ```
 
