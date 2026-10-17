@@ -19,12 +19,12 @@ def despeckle(ink: np.ndarray, min_area: int) -> np.ndarray:
 
 
 def crop_and_resize(ink: np.ndarray, mask: np.ndarray, pad: float, size: int) -> np.ndarray:
-    """Crop to the dog plus padding, then scale so the long side is `size` px (0 = keep)."""
-    ys, xs = np.nonzero(mask)
-    p = int(pad * max(np.ptp(ys), np.ptp(xs)))
-    y0, y1 = max(ys.min() - p, 0), min(ys.max() + p + 1, ink.shape[0])
-    x0, x1 = max(xs.min() - p, 0), min(xs.max() + p + 1, ink.shape[1])
-    ink = ink[y0:y1, x0:x1]
+    """Crop to the drawn lines plus an even transparent margin (`pad` x their size), then
+    scale so the long side is `size` px (0 = keep). Falls back to the dog if nothing is drawn."""
+    ys, xs = np.nonzero(ink) if ink.any() else np.nonzero(mask)
+    ink = ink[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
+    p = int(pad * max(ink.shape))
+    ink = np.pad(ink, p)
     if size:
         f = size / max(ink.shape)
         resized = cv2.resize(ink.astype(np.float32), None, fx=f, fy=f, interpolation=cv2.INTER_LINEAR)

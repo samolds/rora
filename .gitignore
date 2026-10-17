@@ -23,3 +23,5 @@ img/in/*
 !img/in/1.jpg
 img/example_out/
 img/out/
+img/out*/
+out/

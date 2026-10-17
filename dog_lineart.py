@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Photo of a dog -> transparent PNG line art (for printing on shirts)."""
 import argparse
-import hashlib
 import json
 import logging
 import sys
@@ -24,24 +23,67 @@ IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".heic", ".webp", ".tif", ".tiff"}
 # They tune the tattoo looks (fineline, brush, ...) and are ignored by styles that don't use them.
 DEFAULT_SETTINGS = {"max_strokes": 50, "head_strokes": 100, "form_lines": 100,
                     "min_votes": 2.5, "coverage": 0.1, "min_score": 0, "freedom": 0.4}
+DEFAULT_DETAIL = 0.5
 
 # command-line options that change the output image (others, like --svg, don't)
 OUTPUT_OPTIONS = ("color", "size", "dpi", "pad", "min_speck", "outline", "antialias",
                   "work_size", "min_conf", "detector", "segmenter")
 
+# short names used in output file names (README has the same table)
+ABBREV = {
+    # all styles
+    "detail": "d", "weight": "w", "invert": "inv",
+    # line / tonal / cartoon styles
+    "threshold": "th", "contrast": "ct", "epsilon": "eps", "blur": "bl", "min_length": "ml",
+    "cell": "cl", "angle": "a", "spacing": "sp", "dot": "dt", "seed": "sd", "crosshatch": "xh",
+    "levels": "lv", "light": "lt", "rim": "rm", "light_angle": "la", "grain": "gr",
+    # tattoo looks
+    "form_lines": "fl", "max_strokes": "bs", "head_strokes": "hs", "min_votes": "mv",
+    "coverage": "cv", "tolerance": "tol", "min_score": "ms", "join_gap": "jg", "smooth": "sm",
+    "edge_band": "eb", "freedom": "f", "features": "ft", "almond_eyes": "ae", "pupils": "pu",
+    "nose_solid": "ns", "max_blobs": "mb", "darkness": "dk", "outline_ratio": "or",
+    "taper": "tp", "passes": "ps", "wobble": "wb", "gaps": "gp", "gap_size": "gs",
+    # output options
+    "color": "col", "size": "px", "dpi": "dpi", "pad": "pad", "min_speck": "spk",
+    "outline": "ol", "antialias": "aa", "work_size": "ws", "min_conf": "mc",
+    "detector": "det", "segmenter": "seg",
+}
+assert len(set(ABBREV.values())) == len(ABBREV), "file-name abbreviations must be unique"
+
+
+def fmt(key: str, value) -> str:
+    key = ABBREV.get(key, key)
+    if isinstance(value, bool):
+        return key if value else f"{key}0"
+    if isinstance(value, (int, float)):
+        return f"{key}{float(value):g}"
+    return f"{key}-{value}".replace("/", "-").replace(" ", "-")
+
 
 def settings_id(name: str, overrides: dict, args) -> tuple[str, str]:
-    """(filename tag, full settings JSON) for one style. Only settings the style actually
-    uses count, so the same effective settings always map to the same file name."""
+    """(file name settings part, full settings JSON) for one style.
+
+    The settings part is the style, its detail and weight, then any other setting that
+    differs from the normal run's defaults (the style's own, with DEFAULT_SETTINGS applied),
+    all in short form (ABBREV), e.g. `edges_d0.4_w1` or `fineline_d0.5_w3_f0.7`. Only
+    settings the style uses count, so the same effective settings always give the same name.
+    """
     style = styles.STYLES[name]
     used = {k: v for k, v in {**style.defaults, **overrides}.items()
             if k in style.defaults or k == "invert"}
-    full = {"style": name, **used, **{k: getattr(args, k) for k in OUTPUT_OPTIONS}}
+    out_opts = {k: getattr(args, k) for k in OUTPUT_OPTIONS}
+    cli_defaults = vars(parse_args([]))
+    baseline = {**style.defaults, **{k: v for k, v in DEFAULT_SETTINGS.items() if k in style.defaults}}
+
+    parts = [name, fmt("detail", used["detail"]), fmt("weight", used["weight"])]
+    parts += [fmt(k, v) for k, v in sorted(used.items())
+              if k not in ("detail", "weight") and v != baseline.get(k)]
+    parts += [fmt(k, v) for k, v in sorted(out_opts.items()) if v != cli_defaults[k]]
+
+    full = {"style": name, **used, **out_opts}
     full = {k: float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else v
-            for k, v in full.items()}  # so 1 and 1.0 hash the same
-    text = json.dumps(full, sort_keys=True)
-    digest = hashlib.sha1(text.encode()).hexdigest()[:6]
-    return f"d{full['detail']:g}_{digest}", text
+            for k, v in full.items()}
+    return "_".join(parts), json.dumps(full, sort_keys=True)
 
 
 def parse_args(argv=None):
@@ -54,11 +96,14 @@ def parse_args(argv=None):
     g = ap.add_argument_group("style")
     g.add_argument("-s", "--style", nargs="+", default=["edges"],
                    help="one or more style names, 'tattoo' (all tattoo looks) or 'all' (default: edges)")
-    g.add_argument("--detail", type=float, default=0.5, help="0 (simple) .. 1 (busy), default 0.5")
+    g.add_argument("--detail", type=float, help="0 (simple) .. 1 (busy), default 0.5")
     g.add_argument("--weight", type=int, help="line weight in px")
     g.add_argument("--set", action="append", default=[], metavar="KEY=VALUE",
                    help="override any style setting, e.g. --set threshold=0.45 (defaults: "
                         + " ".join(f"{k}={v}" for k, v in DEFAULT_SETTINGS.items()) + ")")
+    g.add_argument("--style-defaults", action="store_true",
+                   help="ignore the command-line defaults above (--detail 0.5 and the --set "
+                        "defaults) and use each style's own defaults (see --list-styles)")
     g.add_argument("--invert", action="store_true",
                    help="flip tonal styles (ink where the dog is dark)")
 
@@ -86,7 +131,7 @@ def parse_args(argv=None):
 
 
 def parse_overrides(args) -> dict:
-    out = dict(DEFAULT_SETTINGS)
+    out = {} if args.style_defaults else dict(DEFAULT_SETTINGS)
     for item in args.set:
         key, _, value = item.partition("=")
         try:
@@ -95,6 +140,8 @@ def parse_overrides(args) -> dict:
             out[key] = value
     if args.detail is not None:
         out["detail"] = args.detail
+    elif not args.style_defaults:
+        out["detail"] = DEFAULT_DETAIL
     if args.weight is not None:
         out["weight"] = args.weight
     if args.invert:
@@ -148,7 +195,7 @@ def main(argv=None) -> int:
     log.info("%d photo(s), style(s): %s, overrides: %s", len(files), names, overrides or "none")
     ids = {n: settings_id(n, overrides, args) for n in names}
     for n, (tag, text) in ids.items():
-        log.info("  %s -> *_%s_%s.png  %s", n, n, tag, text)
+        log.info("  %s -> <photo>__%s.png  %s", n, tag, text)
     used_keys = {k for n in names for k in styles.STYLES[n].defaults} | {"invert"}
     ignored = sorted({s.partition("=")[0] for s in args.set} - used_keys)
     if ignored:
@@ -191,7 +238,7 @@ def main(argv=None) -> int:
                     ink = export.crop_and_resize(ink, dog.mask, args.pad, args.size)
 
                     tag, settings = ids[name]
-                    stem = f"{path.stem}{dog_tag}_{name}_{tag}"
+                    stem = f"{path.stem}{dog_tag}__{tag}"
                     img = export.save_png(ink, args.out / f"{stem}.png", args.color,
                                           args.antialias, args.dpi, settings)
                     msg = f"  {name}: {stem}.png {img.width}x{img.height}"
