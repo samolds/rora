@@ -51,10 +51,10 @@ The full settings are also embedded in each PNG (text field `dog_lineart_setting
 | `cl` | cell | `sm` | smooth | `mc` | --min-conf |
 | `a` | angle | `eb` | edge_band | `det` | --detector |
 | `sp` | spacing | `f` | freedom | `seg` | --segmenter |
-| `dt` | dot | `ft` | features | | |
-| `sd` | seed | `ae` | almond_eyes | | |
-| `xh` | crosshatch | `pu` | pupils | | |
-| `lv` | levels | `ns` | nose_solid | | |
+| `dt` | dot | `ft` | features | `rf` | --refine (refined files only) |
+| `sd` | seed | `ae` | almond_eyes | `rsd` | --refine-seed |
+| `xh` | crosshatch | `pu` | pupils | `rst` | --refine-strength |
+| `lv` | levels | `ns` | nose_solid | `rp` | --refine-prompt (short hash) |
 | `lt` | light | `mb` | max_blobs | | |
 | `rm` | rim | `dk` | darkness | | |
 | `la` | light_angle | `or` | outline_ratio | | |
@@ -139,6 +139,54 @@ env/bin/python dog_lineart.py img/in -o out -s all --style-defaults
 
 Each takes roughly 20–25 minutes for about 50 photos on an Apple M-series Mac.
 `--no-preview` keeps each run in the loop from overwriting the same `_preview.png`.
+
+## Optional: refine with an image model (Draw Things)
+
+`--refine` adds a final pass that sends each finished drawing through an image-editing model
+running locally in [Draw Things](https://drawthings.ai), to clean it up or restyle it so it
+clearly reads as a dog. The original is always written; the refined version is written next to
+it with `_rf-<mode>` added to the name (e.g. `1__edges_d0.5_w2_rf-clean.png`).
+
+| Mode | What it does |
+|---|---|
+| `clean` | light touch-up: removes stray marks, joins broken lines, keeps everything else |
+| `stylize` | redraws more clearly in the same style and pose (clear outline, eyes, nose, mouth) |
+| `auto` | scores each drawing for "looks like a dog" (OWLv2); skips good ones, cleans middling ones, stylizes poor ones |
+
+A refined result is thrown away (and logged) if it looks *less* like a dog than the original.
+The dog scores (0–1) are in `run.log`; tune `auto` with `--refine-threshold` (default 0.5). The result
+is clipped to the dog's outline, so the model can't add background.
+
+### Setting up Draw Things (one time, macOS on Apple silicon)
+
+Draw Things is a free Mac app; it can't be installed by `setup.sh`.
+
+1. Install it from the [Mac App Store](https://apps.apple.com/us/app/draw-things-ai-generation/id6444050820).
+2. Open it, click the model name at the top of the settings panel and download an
+   **image-editing** model:
+
+   | Model (name in Draw Things) | Notes |
+   |---|---|
+   | FLUX.1 Kontext [dev] | good default; follows instructions and keeps the layout |
+   | Qwen Image Edit 2511 | best at keeping the drawing as it is; larger and slower |
+   | FLUX.2 [klein] 4B | smallest and fastest; a little less faithful |
+
+   Plain text-to-image models (SDXL, FLUX.1 [schnell], ...) ignore the drawing at the default
+   `--refine-strength 1.0`; with them use `--refine-strength 0.3`–`0.6`.
+3. Select the model, then turn on the API server in the app's settings (**API Server**:
+   protocol **HTTP**, port **7860**). Keep the app open while the pipeline runs.
+
+If Draw Things isn't running (or the selected model can't edit images) the run stops right away
+with these instructions.
+
+```sh
+env/bin/python dog_lineart.py img/in/1.jpg -s fineline --refine auto
+env/bin/python dog_lineart.py img/in/1.jpg -s fineline --refine stylize --refine-prompt "thicker outline"
+```
+
+Other options: `--refine-url` (default `http://127.0.0.1:7860`), `--refine-seed`,
+`--refine-strength`. With `--debug`, the image sent to the model and its raw reply are saved too.
+Steps, guidance and sampler come from the current settings in the Draw Things app.
 
 ## Styles
 
@@ -307,6 +355,7 @@ Specific to each look:
 | `rora/edgemaps.py`, `rora/strokes.py`, `rora/cleanup.py` | tattoo passes 1, 2 and 3 |
 | `rora/tattoo.py`, `rora/styles.py` | line looks and other styles |
 | `rora/export.py` | PNG / SVG / preview output |
+| `rora/refine.py` | optional `--refine` pass through Draw Things |
 | `rora/env.py` | keeps model downloads and settings in `./models` |
 | `setup.sh` | one-time setup |
 

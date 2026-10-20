@@ -28,3 +28,5 @@ PY
 echo
 echo "Done. Put photos in img/in/ and run:"
 echo "  env/bin/python dog_lineart.py --style tattoo --preview"
+echo
+echo "Optional: the --refine pass needs the Draw Things app (see README, 'Optional: refine')."

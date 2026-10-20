@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Photo of a dog -> transparent PNG line art (for printing on shirts)."""
 import argparse
+import hashlib
 import json
 import logging
 import sys
@@ -11,7 +12,7 @@ from rora import env  # noqa: F401  (must come before torch/ultralytics imports)
 import cv2
 import numpy as np
 
-from rora import export, styles, tattoo
+from rora import export, refine, styles, tattoo
 from rora.segment import DogSegmenter, load_image
 
 log = logging.getLogger("dog_lineart")
@@ -45,6 +46,8 @@ ABBREV = {
     "color": "col", "size": "px", "dpi": "dpi", "pad": "pad", "min_speck": "spk",
     "outline": "ol", "antialias": "aa", "work_size": "ws", "min_conf": "mc",
     "detector": "det", "segmenter": "seg",
+    # refine pass (only in refined files' names)
+    "refine": "rf", "refine_seed": "rsd", "refine_strength": "rst", "refine_prompt": "rp",
 }
 assert len(set(ABBREV.values())) == len(ABBREV), "file-name abbreviations must be unique"
 
@@ -82,6 +85,18 @@ def settings_id(name: str, overrides: dict, args) -> tuple[str, str]:
     full = {k: float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else v
             for k, v in full.items()}
     return "_".join(parts), json.dumps(full, sort_keys=True)
+
+
+def refine_tag(mode: str, args) -> str:
+    """File name suffix for a refined result, e.g. `rf-clean` or `rf-stylize_rsd7`."""
+    cli_defaults = vars(parse_args([]))
+    parts = [fmt("refine", mode)]
+    parts += [fmt(k, getattr(args, k)) for k in ("refine_seed", "refine_strength")
+              if getattr(args, k) != cli_defaults[k]]
+    if args.refine_prompt.strip():
+        digest = hashlib.sha1(args.refine_prompt.strip().encode()).hexdigest()[:6]
+        parts.append(fmt("refine_prompt", digest))
+    return "_".join(parts)
 
 
 def parse_args(argv=None):
@@ -125,6 +140,23 @@ def parse_args(argv=None):
     g.add_argument("--device", default="auto", help="auto | mps | cuda | cpu")
     g.add_argument("--detector", default="yolo11x.pt")
     g.add_argument("--segmenter", default="sam2.1_b.pt")
+
+    g = ap.add_argument_group("refine (optional final pass through an image model in Draw Things)")
+    g.add_argument("--refine", choices=refine.MODES, default="off",
+                   help="clean = light touch-up, stylize = redraw more clearly, auto = skip "
+                        "drawings that already look like a dog, otherwise clean or stylize "
+                        "(default: off). Writes the refined file next to the original")
+    g.add_argument("--refine-url", default=refine.DEFAULT_URL,
+                   help="Draw Things HTTP API server (default: %(default)s)")
+    g.add_argument("--refine-prompt", default="",
+                   help="extra instruction added to the built-in one, e.g. 'thicker outline'")
+    g.add_argument("--refine-seed", type=int, default=1)
+    g.add_argument("--refine-strength", type=float, default=1.0,
+                   help="1.0 for editing models (Kontext, Qwen Image Edit, FLUX.2 klein); "
+                        "0.3-0.6 for plain image-to-image models")
+    g.add_argument("--refine-threshold", type=float, default=0.5,
+                   help="auto: skip drawings whose dog score is at least this; below half of "
+                        "it, stylize instead of clean (scores are in run.log)")
     return ap.parse_args(argv)
 
 
@@ -175,6 +207,17 @@ def list_styles():
         print(f"{name:10s} {s.description}\n{'':10s} {settings}")
 
 
+def save_outputs(args, ink: np.ndarray, stem: str, settings: str):
+    """Write <stem>.png (and .svg); returns the PNG image and a log message."""
+    img = export.save_png(ink, args.out / f"{stem}.png", args.color, args.antialias, args.dpi,
+                          settings)
+    msg = f"{stem}.png {img.width}x{img.height}"
+    if args.svg:
+        n = export.save_svg(ink, args.out / f"{stem}.svg", args.color, settings=settings)
+        msg += f" + .svg ({n} paths)"
+    return img, msg
+
+
 def main(argv=None) -> int:
     args = parse_args(argv)
     if args.list_styles:
@@ -200,6 +243,17 @@ def main(argv=None) -> int:
         log.warning("  --set %s not used by style(s) %s", ", ".join(ignored), names)
     if not files:
         return 1
+
+    refine_opts = None
+    if args.refine != "off":
+        try:
+            model = refine.check_server(args.refine_url, args.refine_strength)
+        except refine.RefineError as e:
+            log.error("%s", e)
+            return 2
+        refine_opts = refine.Options(args.refine_url, args.refine_prompt, args.refine_seed,
+                                     args.refine_strength, args.refine_threshold)
+        log.info("Refine: %s via Draw Things at %s, model %s", args.refine, args.refine_url, model)
 
     seg = DogSegmenter(args.device, args.detector, args.segmenter, args.min_conf)
     previews, written, skipped = [], 0, []
@@ -233,21 +287,45 @@ def main(argv=None) -> int:
                     if args.outline:
                         ink |= styles.silhouette(dog.mask, args.outline)
                     ink = export.despeckle(ink, args.min_speck)
-                    ink = export.crop_and_resize(ink, dog.mask, args.pad, args.size)
+                    out = export.crop_and_resize(ink, dog.mask, args.pad, args.size)
 
                     tag, settings = ids[name]
                     stem = f"{path.stem}{dog_tag}__{tag}"
-                    img = export.save_png(ink, args.out / f"{stem}.png", args.color,
-                                          args.antialias, args.dpi, settings)
-                    msg = f"  {name}: {stem}.png {img.width}x{img.height}"
-                    if args.svg:
-                        n = export.save_svg(ink, args.out / f"{stem}.svg", args.color,
-                                            settings=settings)
-                        msg += f" + .svg ({n} paths)"
-                    log.info("%s, ink %.0f%% (%.1fs)", msg, 100 * ink.mean(),
+                    img, msg = save_outputs(args, out, stem, settings)
+                    log.info("  %s: %s, ink %.0f%% (%.1fs)", name, msg, 100 * out.mean(),
                              time.perf_counter() - t)
                     previews.append((stem, img))
                     written += 1
+
+                    if refine_opts:
+                        finder = tattoo.get_finder(seg.device)
+                        try:
+                            r = refine.refine(ink, dog.mask, args.refine, finder, refine_opts)
+                        except refine.RefineError as e:
+                            log.error("  refine failed, keeping only the original: %s", e)
+                            continue
+                        if r.mode == "skip":
+                            log.info("  refine: dog score %.2f >= %.2f, skipped",
+                                     r.score_before, args.refine_threshold)
+                            continue
+                        rstem = f"{stem}_{refine_tag(r.mode, args)}"
+                        if args.debug:
+                            cv2.imwrite(str(args.out / f"{rstem}_debug_sent.png"), r.sent)
+                            cv2.imwrite(str(args.out / f"{rstem}_debug_raw.png"),
+                                        cv2.cvtColor(r.raw, cv2.COLOR_RGB2BGR))
+                        if r.ink is None:
+                            log.warning("  refine (%s) rejected, %s; keeping only the original",
+                                        r.mode, r.rejected)
+                            continue
+                        rout = export.despeckle(r.ink, args.min_speck)
+                        rout = export.crop_and_resize(rout, dog.mask, args.pad, args.size)
+                        rsettings = json.dumps({**json.loads(settings), **r.settings},
+                                               sort_keys=True)
+                        rimg, rmsg = save_outputs(args, rout, rstem, rsettings)
+                        log.info("  refine (%s): %s, dog score %.2f -> %.2f (%.1fs)", r.mode,
+                                 rmsg, r.score_before, r.score_after, r.seconds)
+                        previews.append((rstem, rimg))
+                        written += 1
         except Exception as e:  # keep the batch going; one bad photo shouldn't stop the run
             log.exception("  failed: %s", e)
             skipped.append(path.name)
