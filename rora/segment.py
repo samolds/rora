@@ -8,7 +8,7 @@ import cv2
 import numpy as np
 from PIL import Image, ImageOps
 
-import env
+from . import env
 
 log = logging.getLogger(__name__)
 

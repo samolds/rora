@@ -8,8 +8,8 @@ contours: the first is filled with ink, the rest are cut out of it (e.g. the eye
 import cv2
 import numpy as np
 
-import cleanup
-from features import Face, Feature
+from . import cleanup
+from .features import Face, Feature
 
 
 def rot(angle: float) -> np.ndarray:

@@ -8,7 +8,7 @@ import cv2
 import numpy as np
 from skimage.morphology import skeletonize
 
-import cleanup
+from . import cleanup
 
 log = logging.getLogger(__name__)
 

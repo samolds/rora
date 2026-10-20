@@ -9,14 +9,9 @@ import logging
 import cv2
 import numpy as np
 
-import cleanup
-import depth
-import edgemaps
-import facedraw
-import features
-import strokes
-from segment import pick_device
-from styles import STYLES, register, scale
+from . import cleanup, depth, edgemaps, facedraw, features, strokes
+from .segment import pick_device
+from .styles import STYLES, register, scale
 
 log = logging.getLogger(__name__)
 

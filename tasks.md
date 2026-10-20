@@ -1,3 +1,4 @@
+0. organize this package
 1. provide an option to 'invert' the drawing, so that it can be used to draw black lines on a white background. leave the .png background transparent
 2. support detecting other things, not just dogs - humans, pets, objects, etc
 3. provide a "rainbow" mode, where the lines are drawn to look like a rainbow, not just white or black

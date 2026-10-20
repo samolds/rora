@@ -7,10 +7,7 @@ import cv2
 import numpy as np
 from PIL import Image
 
-import cleanup
-import edgemaps
-import env
-import strokes
+from . import cleanup, edgemaps, env, strokes
 
 log = logging.getLogger(__name__)
 

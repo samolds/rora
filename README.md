@@ -10,8 +10,7 @@ in one of several styles, including minimalist tattoo-style line art.
 
 ```
 for d in 0.1 0.3 0.5 0.8 1; do
-  .venv/bin/python dog_lineart.py img/in -s edges ink noir outline sketch stencil stipple --detail $d --no-preview
-  .venv/bin/python dog_lineart.py img/in -s edges --detail $d --weight 1 --no-preview
+  env/bin/python dog_lineart.py img/in -s edges ink noir outline sketch stencil stipple --detail $d --no-preview
 done
 ```
 
@@ -23,10 +22,10 @@ Works on macOS (Apple GPU), Linux/Windows (CUDA GPU) or plain CPU.
 
 ```sh
 ./setup.sh                                                        # one time: venv, dependencies, model weights
-.venv/bin/python dog_lineart.py img/in/1.jpg --style tattoo --preview   # try the included demo photo
+env/bin/python dog_lineart.py img/in/1.jpg --style tattoo --preview     # try the included demo photo
 ```
 
-Then add your own photos to `img/in/` and run `.venv/bin/python dog_lineart.py --preview`.
+Then add your own photos to `img/in/` and run `env/bin/python dog_lineart.py --preview`.
 Results go to `img/out/`, including `_preview.png` (every result on a dark background) and `run.log`.
 
 Output files are named `<photo>__<style>_d<detail>_w<weight>[_<other settings>].png`, e.g.
@@ -77,7 +76,7 @@ To uninstall, delete the folder.
 ## Usage
 
 ```sh
-source .venv/bin/activate
+source env/bin/activate
 
 # one photo, one style
 python dog_lineart.py img/in/1.jpg --style fineline
@@ -127,7 +126,7 @@ Every photo with `edges`, across a grid of detail and line weight (12 combinatio
 ```sh
 for d in 0.2 0.4 0.6 0.8; do
   for w in 1 2 3; do
-    .venv/bin/python dog_lineart.py img/in -o out -s edges --detail $d --weight $w --no-preview
+    env/bin/python dog_lineart.py img/in -o out -s edges --detail $d --weight $w --no-preview
   done
 done
 ```
@@ -135,7 +134,7 @@ done
 Every photo in every style, each with that style's own defaults:
 
 ```sh
-.venv/bin/python dog_lineart.py img/in -o out -s all --style-defaults
+env/bin/python dog_lineart.py img/in -o out -s all --style-defaults
 ```
 
 Each takes roughly 20–25 minutes for about 50 photos on an Apple M-series Mac.
@@ -301,13 +300,14 @@ Specific to each look:
 | Path | What |
 |---|---|
 | `dog_lineart.py` | command-line entry point |
-| `segment.py` | dog detection and cut-out |
-| `features.py`, `facedraw.py` | find and draw eyes, nose, mouth |
-| `depth.py` | depth estimate and form lines (volume) |
-| `edgemaps.py`, `strokes.py`, `cleanup.py` | tattoo passes 1, 2 and 3 |
-| `tattoo.py`, `styles.py` | line looks and other styles |
-| `export.py` | PNG / SVG / preview output |
-| `env.py` | keeps model downloads and settings in `./models` |
+| `rora/` | pipeline package (modules below) |
+| `rora/segment.py` | dog detection and cut-out |
+| `rora/features.py`, `rora/facedraw.py` | find and draw eyes, nose, mouth |
+| `rora/depth.py` | depth estimate and form lines (volume) |
+| `rora/edgemaps.py`, `rora/strokes.py`, `rora/cleanup.py` | tattoo passes 1, 2 and 3 |
+| `rora/tattoo.py`, `rora/styles.py` | line looks and other styles |
+| `rora/export.py` | PNG / SVG / preview output |
+| `rora/env.py` | keeps model downloads and settings in `./models` |
 | `setup.sh` | one-time setup |
 
-Not in git (recreated by `setup.sh` or at run time): `.venv/`, `models/`, `img/out/`, `out/`, `lab/`.
+Not in git (recreated by `setup.sh` or at run time): `env/`, `models/`, `img/out/`, `out/`, `lab/`.

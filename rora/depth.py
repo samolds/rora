@@ -11,7 +11,7 @@ import cv2
 import numpy as np
 from PIL import Image
 
-import env  # noqa: F401  (keeps model downloads in ./models)
+from . import env  # noqa: F401  (keeps model downloads in ./models)
 
 log = logging.getLogger(__name__)
 
@@ -81,8 +81,7 @@ def form_map(depth: np.ndarray, mask: np.ndarray) -> np.ndarray:
 def form_strokes(form: np.ndarray, mask: np.ndarray, count: int, exclude: np.ndarray | None,
                  coverage: float = 0.04) -> list[np.ndarray]:
     """The `count` strongest, longest form lines, as smooth polylines."""
-    import cleanup
-    import strokes
+    from . import cleanup, strokes
     from skimage.morphology import skeletonize
 
     if count <= 0:

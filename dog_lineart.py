@@ -7,14 +7,12 @@ import sys
 import time
 from pathlib import Path
 
-import env  # noqa: F401  (must come before torch/ultralytics imports)
+from rora import env  # noqa: F401  (must come before torch/ultralytics imports)
 import cv2
 import numpy as np
 
-import export
-import styles
-import tattoo
-from segment import DogSegmenter, load_image
+from rora import export, styles, tattoo
+from rora.segment import DogSegmenter, load_image
 
 log = logging.getLogger("dog_lineart")
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".heic", ".webp", ".tif", ".tiff"}

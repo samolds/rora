@@ -11,7 +11,7 @@ import cv2
 import numpy as np
 from PIL import Image
 
-import env  # noqa: F401  (keeps model downloads in ./models)
+from . import env  # noqa: F401  (keeps model downloads in ./models)
 
 log = logging.getLogger(__name__)
 

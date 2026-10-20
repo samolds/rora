@@ -5,7 +5,7 @@
 __pycache__/
 *.py[cod]
 *.egg-info
-.venv/
+env/
 
 # Model weights and caches (downloaded by ./setup.sh or on first run)
 models/
