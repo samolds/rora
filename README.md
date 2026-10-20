@@ -1,7 +1,7 @@
 # rora
 
 Turn photos of dogs, cats and people into print-ready line art: a transparent PNG (and optional
-SVG) of just the subjects, drawn in white lines for printing on dark shirts.
+SVG) of just the subjects, drawn in white lines for printing on dark.
 
 The pipeline finds the people, cats and dogs in each photo, cuts them out, and draws them in
 one of several styles, including minimalist tattoo-style line art. By default every subject
@@ -9,11 +9,24 @@ detected with high confidence is drawn, all together in one image; `--subject au
 the main one (the biggest, most central), and `--subject dog` (or `cat`, `person`) draws each
 one of that kind in its own image.
 
-## Sam's Favorite run config
+## Sam's Favorite Runs
+
+```
+env/bin/python lineart.py img/in -s edges ink noir outline sketch stencil stipple --detail 1 --no-preview --subject dog --refine stylize --sample 1
+env/bin/python lineart.py img/peevin -s edges ink noir outline sketch stencil stipple --detail 1 --no-preview --subject all --refine stylize --sample 1
+```
+
+```
+env/bin/python lineart.py img/in -s edges ink noir outline sketch stencil stipple --detail 1 --no-preview --refine stylize --refine-prompt "alter style to character from epic star wars concept art" --sample 1
+```
+
+```
+env/bin/python lineart.py img/in -s edges ink noir outline sketch stencil stipple --detail 1 --no-preview --subject dog --invert --color black --sample 1
+```
 
 ```
 for d in 0.1 0.3 0.5 0.8 1; do
-  env/bin/python lineart.py img/in -s edges ink noir outline sketch stencil stipple --detail $d --no-preview
+  env/bin/python lineart.py img/in -s edges ink noir outline sketch stencil stipple --detail $d --no-preview --sample 1
 done
 ```
 
@@ -101,7 +114,7 @@ python lineart.py img/in/1.jpg -s fineline --detail 0      # just outline + face
 python lineart.py img/in/1.jpg -s fineline --detail 0.6
 python lineart.py img/in/1.jpg -s fineline --set freedom=0.9
 
-# black ink for light shirts
+# black ink for light print
 python lineart.py img/in/1.jpg -s bold --color black
 
 # list styles and every tunable setting
