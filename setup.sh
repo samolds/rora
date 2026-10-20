@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 # One-time setup: virtual env, dependencies and model weights, all inside this folder.
-# ./setup.sh --refine also downloads the image-editing model for the optional --refine pass.
+# ./setup.sh --refine also downloads the image-editing model for the optional --refine pass
+# (--refine=<model> for another one; see `env/bin/python lineart.py --help`).
 set -euo pipefail
 cd "$(dirname "$0")"
 
-REFINE=0
+REFINE=""
 for arg in "$@"; do
   case "$arg" in
-    --refine) REFINE=1 ;;
-    *) echo "usage: ./setup.sh [--refine]" >&2; exit 2 ;;
+    --refine) REFINE=default ;;
+    --refine=*) REFINE="${arg#--refine=}" ;;
+    *) echo "usage: ./setup.sh [--refine[=MODEL]]" >&2; exit 2 ;;
   esac
 done
 
@@ -34,15 +36,24 @@ features.FeatureFinder("cpu")
 depth.load_model("cpu")
 PY
 
-if [ "$REFINE" = 1 ]; then
-  echo "Downloading FLUX.2 [klein] 4B for --refine into the shared Hugging Face cache (about 16 GB, first time only)..."
-  HF_HUB_OFFLINE=0 env/bin/python -W ignore -c 'from rora import refine; refine.download()'
+if [ -n "$REFINE" ]; then
+  HF_HUB_OFFLINE=0 env/bin/python -W ignore - "$REFINE" <<'PY'
+import sys
+from rora import refine
+key = refine.DEFAULT_MODEL if sys.argv[1] == "default" else sys.argv[1]
+if key not in refine.MODELS:
+    sys.exit(f"unknown model {key!r}; choose from {', '.join(refine.MODELS)}")
+m = refine.MODELS[key]
+print(f"Downloading {m.name} for --refine into the shared Hugging Face cache "
+      f"(about {m.download_gb:.0f} GB, first time only)...")
+refine.download(key)
+PY
 fi
 
 echo
 echo "Done. Put photos in img/in/ and run:"
-echo "  env/bin/python dog_lineart.py --style tattoo --preview"
-if [ "$REFINE" = 0 ]; then
+echo "  env/bin/python lineart.py --style tattoo --preview"
+if [ -z "$REFINE" ]; then
   echo
   echo "Optional: run ./setup.sh --refine to enable the --refine pass (downloads about 16 GB)."
 fi

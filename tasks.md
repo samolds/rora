@@ -16,7 +16,7 @@ old single-pass `--refine` loaded FLUX.2 [klein] 4B on top of ~8 PyTorch drawing
 died; the first two-phase version still peaked at a 17.2 GB footprint and swapped.
 
 ### What changed
-- Two phases (`dog_lineart.py`): phase 1 draws everything and queues a `RefineJob` per drawing
+- Two phases (`lineart.py`): phase 1 draws everything and queues a `RefineJob` per drawing
   (ink + mask bit-packed); then `release_models()` + `free_device_memory()`; phase 2
   (`refine_all`) loads klein once and refines every job.
 - `free_device_memory()` after every photo: torch's MPS cache otherwise grows ~1-2 GB per photo.
@@ -40,13 +40,21 @@ died; the first two-phase version still peaked at a 17.2 GB footprint and swappe
   bf16) gives bit-identical output, ~0.6 GB lower peak; the diffusers backend needs bf16. Decide
   when consolidating with backyard.
 
+### Since then (uncommitted)
+- `dog_lineart.py` renamed to `lineart.py` (PNG text key stays `dog_lineart_settings` for old files).
+- `--refine-model` (`refine.MODELS`: klein-4b default, klein-9b, kontext-dev) with a memory guard
+  (`refine.check_memory`: refuses above RAM - 3 GB unless `--refine-force`, warns above free
+  memory). Only klein-4b is downloaded/tested; the others are wired up but untested.
+- `rora/seams.py`: after refine, bridges strokes broken across the VAE tile bands and removes
+  straight lines along them (mflux only). On 3 real drawings: 1 tiny bridge, 0 lines.
+
 ### Next steps
 - Phase 1 (drawing) is now the peak (~10-11.5 GB on a two-subject photo at 2500 px).
 - Consolidate backyard's image generation (DrawThings) onto mflux + the shared HF cache, then
   remove DrawThings and its model.
 
 ### Context for a new session
-- venv is `env/` (`env/bin/python`); package code in `rora/`; entry point `dog_lineart.py`.
+- venv is `env/` (`env/bin/python`); package code in `rora/`; entry point `lineart.py`.
 - Refine model: FLUX.2 [klein] 4B, pinned revision in `rora/refine.py`, downloaded by
   `./setup.sh --refine` into the **shared** HF cache `~/.cache/huggingface/hub` (override with
   `RORA_REFINE_CACHE`); backends mflux (Apple silicon) / diffusers (elsewhere).

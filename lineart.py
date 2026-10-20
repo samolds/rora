@@ -17,7 +17,7 @@ from rora import export, refine, styles, tattoo
 from rora.segment import (COCO_KINDS, SUBJECTS, Segmenter, describe, free_device_memory,
                           load_image)
 
-log = logging.getLogger("dog_lineart")
+log = logging.getLogger("lineart")
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".heic", ".webp", ".tif", ".tiff"}
 
 # Default --set values; any --set KEY=VALUE on the command line overrides these.
@@ -50,6 +50,7 @@ ABBREV = {
     "detector": "det", "segmenter": "seg",
     # refine pass (only in refined files' names)
     "refine": "rf", "refine_seed": "rsd", "refine_quantize": "rq", "refine_prompt": "rp",
+    "refine_model": "rmd",
 }
 assert len(set(ABBREV.values())) == len(ABBREV), "file-name abbreviations must be unique"
 
@@ -95,7 +96,7 @@ def refine_tag(mode: str, args) -> str:
     """File name suffix for a refined result, e.g. `rf-clean` or `rf-stylize_rsd7`."""
     cli_defaults = vars(parse_args([]))
     parts = [fmt("refine", mode)]
-    parts += [fmt(k, getattr(args, k)) for k in ("refine_seed", "refine_quantize")
+    parts += [fmt(k, getattr(args, k)) for k in ("refine_model", "refine_seed", "refine_quantize")
               if getattr(args, k) != cli_defaults[k]]
     if args.refine_prompt.strip():
         digest = hashlib.sha1(args.refine_prompt.strip().encode()).hexdigest()[:6]
@@ -153,17 +154,24 @@ def parse_args(argv=None):
     g.add_argument("--detector", default="yolo11x.pt")
     g.add_argument("--segmenter", default="sam2.1_b.pt")
 
-    g = ap.add_argument_group(f"refine (optional final pass through the {refine.MODEL_NAME} "
-                              "image-editing model)")
+    g = ap.add_argument_group("refine (optional final pass through an image-editing model)")
     g.add_argument("--refine", choices=refine.MODES, default="off",
                    help="clean = light touch-up, stylize = redraw more clearly, auto = skip "
                         "drawings that already look like their subject, otherwise clean or stylize "
                         "(default: off). Writes the refined file next to the original")
+    g.add_argument("--refine-model", choices=list(refine.MODELS), default=refine.DEFAULT_MODEL,
+                   help="; ".join(f"{k} = {m.name} ({m.licence})"
+                                  for k, m in refine.MODELS.items())
+                        + f" (default: {refine.DEFAULT_MODEL}). Before loading, the run checks "
+                          "the model fits in memory")
+    g.add_argument("--refine-force", action="store_true",
+                   help="run even if the model is too big for this machine's RAM (it may "
+                        "swap heavily, freeze or crash)")
     g.add_argument("--refine-backend", choices=refine.BACKENDS, default="auto",
                    help="auto = mflux on Apple silicon, diffusers elsewhere")
     g.add_argument("--refine-quantize", type=int, choices=(0, 4, 8), default=4,
-                   help="mflux weight precision in bits: 8 needs ~1.5 GB more memory, "
-                        "0 = full precision needs far more (default: 4)")
+                   help="mflux weight precision in bits: 8 and 0 (full precision) need much more "
+                        "memory, see the check at the start of the run (default: 4)")
     g.add_argument("--refine-prompt", default="",
                    help="extra instruction added to the built-in one, e.g. 'thicker outline'")
     g.add_argument("--refine-seed", type=int, default=1)
@@ -331,8 +339,10 @@ def refine_all(args, jobs: list, refine_opts, device: str, previews: list) -> in
         rout = export.crop_and_resize(rout, mask, args.pad, args.size)
         rsettings = json.dumps({**json.loads(job.settings), **r.settings}, sort_keys=True)
         rimg, rmsg = save_outputs(args, rout, rstem, rsettings)
-        log.info("  refine (%s): %s, score %.2f -> %.2f (%.1fs)", r.mode, rmsg,
-                 r.score_before, r.score_after, r.seconds)
+        seam_note = (f", seams: {r.seams[0]} break(s) bridged, {r.seams[1]} line(s) removed"
+                     if any(r.seams) else "")
+        log.info("  refine (%s): %s, score %.2f -> %.2f%s (%.1fs)", r.mode, rmsg,
+                 r.score_before, r.score_after, seam_note, r.seconds)
         previews.append((rstem, rimg))
         written += 1
     return written
@@ -367,13 +377,19 @@ def main(argv=None) -> int:
     refine_opts = None
     if args.refine != "off":
         try:
-            backend = refine.check_ready(args.refine_backend)
+            backend = refine.check_ready(args.refine_backend, args.refine_model)
+            warning = refine.check_memory(args.refine_model, backend, args.refine_quantize,
+                                          args.refine_force)
         except refine.RefineError as e:
             log.error("%s", e)
             return 2
+        if warning:
+            log.warning("Refine memory: %s", warning)
         refine_opts = refine.Options(backend, args.refine_prompt, args.refine_seed,
-                                     args.refine_threshold, args.refine_quantize)
-        log.info("Refine: %s with %s via %s", args.refine, refine.MODEL_NAME, backend)
+                                     args.refine_threshold, args.refine_quantize,
+                                     args.refine_model)
+        log.info("Refine: %s with %s via %s", args.refine,
+                 refine.MODELS[args.refine_model].name, backend)
 
     seg = Segmenter(args.device, args.detector, args.segmenter, args.min_conf)
     device = seg.device
@@ -405,7 +421,7 @@ def main(argv=None) -> int:
     if refine_jobs:
         # the image-editing model needs the memory the drawing models were holding
         log.info("Refine phase: freeing the drawing models, then %d drawing(s) through %s",
-                 len(refine_jobs), refine.MODEL_NAME)
+                 len(refine_jobs), refine.MODELS[refine_opts.model].name)
         del seg
         tattoo.release_models()
         free_device_memory()

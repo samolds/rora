@@ -13,7 +13,7 @@ one of that kind in its own image.
 
 ```
 for d in 0.1 0.3 0.5 0.8 1; do
-  env/bin/python dog_lineart.py img/in -s edges ink noir outline sketch stencil stipple --detail $d --no-preview
+  env/bin/python lineart.py img/in -s edges ink noir outline sketch stencil stipple --detail $d --no-preview
 done
 ```
 
@@ -25,10 +25,10 @@ Works on macOS (Apple GPU), Linux/Windows (CUDA GPU) or plain CPU.
 
 ```sh
 ./setup.sh                                                        # one time: venv, dependencies, model weights
-env/bin/python dog_lineart.py img/in/1.jpg --style tattoo --preview     # try the included demo photo
+env/bin/python lineart.py img/in/1.jpg --style tattoo --preview     # try the included demo photo
 ```
 
-Then add your own photos to `img/in/` and run `env/bin/python dog_lineart.py --preview`.
+Then add your own photos to `img/in/` and run `env/bin/python lineart.py --preview`.
 Results go to `img/out/`, including `_preview.png` (every result on a dark background) and `run.log`.
 
 Output files are named `<photo>__<style>_d<detail>_w<weight>[_<other settings>].png`, e.g.
@@ -85,24 +85,24 @@ To uninstall, delete the folder.
 source env/bin/activate
 
 # one photo, one style
-python dog_lineart.py img/in/1.jpg --style fineline
+python lineart.py img/in/1.jpg --style fineline
 
 # several styles, with a contact sheet
-python dog_lineart.py img/in/1.jpg -s fineline brush dotwork --preview
+python lineart.py img/in/1.jpg -s fineline brush dotwork --preview
 
 # every photo in a folder, every tattoo style, plus SVG
-python dog_lineart.py img/in -s tattoo --svg --preview
+python lineart.py img/in -s tattoo --svg --preview
 
 # fewer / more lines, cleaner / more literal lines
-python dog_lineart.py img/in/1.jpg -s fineline --detail 0      # just outline + face
-python dog_lineart.py img/in/1.jpg -s fineline --detail 0.6
-python dog_lineart.py img/in/1.jpg -s fineline --set freedom=0.9
+python lineart.py img/in/1.jpg -s fineline --detail 0      # just outline + face
+python lineart.py img/in/1.jpg -s fineline --detail 0.6
+python lineart.py img/in/1.jpg -s fineline --set freedom=0.9
 
 # black ink for light shirts
-python dog_lineart.py img/in/1.jpg -s bold --color black
+python lineart.py img/in/1.jpg -s bold --color black
 
 # list styles and every tunable setting
-python dog_lineart.py --list-styles
+python lineart.py --list-styles
 ```
 
 Useful options: `--detail 0..1` (how much is drawn), `--weight N` (line width),
@@ -111,9 +111,9 @@ Useful options: `--detail 0..1` (how much is drawn), `--weight N` (line width),
 `--subject all|auto|dog|cat|person` (default `all`: every person, cat and dog detected with at
 least `--subject-conf` 0.8 confidence, plus the main one, together in one image; `auto`: only
 the main subject; a kind: each one of that kind, in its own image).
-Run `python dog_lineart.py --help` for the full list.
+Run `python lineart.py --help` for the full list.
 
-With no options, `python dog_lineart.py` runs every photo in `img/in/` with:
+With no options, `python lineart.py` runs every photo in `img/in/` with:
 
 ```sh
 -s edges --detail 0.5 --preview \
@@ -135,7 +135,7 @@ Every photo with `edges`, across a grid of detail and line weight (12 combinatio
 ```sh
 for d in 0.2 0.4 0.6 0.8; do
   for w in 1 2 3; do
-    env/bin/python dog_lineart.py img/in -o out -s edges --detail $d --weight $w --no-preview
+    env/bin/python lineart.py img/in -o out -s edges --detail $d --weight $w --no-preview
   done
 done
 ```
@@ -143,7 +143,7 @@ done
 Every photo in every style, each with that style's own defaults:
 
 ```sh
-env/bin/python dog_lineart.py img/in -o out -s all --style-defaults
+env/bin/python lineart.py img/in -o out -s all --style-defaults
 ```
 
 Each takes roughly 20–25 minutes for about 50 photos on an Apple M-series Mac.
@@ -151,9 +151,9 @@ Each takes roughly 20–25 minutes for about 50 photos on an Apple M-series Mac.
 
 ## Optional: refine with an image-editing model
 
-`--refine` adds a final pass that runs each finished drawing through the
-[FLUX.2 [klein] 4B](https://huggingface.co/black-forest-labs/FLUX.2-klein-4B) image-editing model
-(Apache-2.0), inside this script, to clean it up or restyle it so it clearly reads as its subject
+`--refine` adds a final pass that runs each finished drawing through an image-editing model
+(by default [FLUX.2 [klein] 4B](https://huggingface.co/black-forest-labs/FLUX.2-klein-4B),
+Apache-2.0), inside this script, to clean it up or restyle it so it clearly reads as its subject
 (dog, cat or person). The original is always written; the refined version is written next to it
 with `_rf-<mode>` added to the name (e.g. `1__edges_d0.5_w2_rf-clean.png`).
 
@@ -167,13 +167,31 @@ A refined result is thrown away (and logged) if it looks *less* like its subject
 original. The scores (0–1) are in `run.log`; tune `auto` with `--refine-threshold` (default 0.5).
 The result is clipped to the subject's outline, so the model can't add background.
 
+### Models
+
+Pick one with `--refine-model` (each is a separate download):
+
+| `--refine-model` | Model | Licence | Download | Memory (mflux, 4-bit) |
+|---|---|---|---|---|
+| `klein-4b` (default) | [FLUX.2 [klein] 4B](https://huggingface.co/black-forest-labs/FLUX.2-klein-4B), Jan 2026, 4 steps | Apache-2.0 | 16 GB | ~8 GB (measured) |
+| `klein-9b` | [FLUX.2 [klein] 9B](https://huggingface.co/black-forest-labs/FLUX.2-klein-9B), Jan 2026, 4 steps | non-commercial, gated | 35 GB | ~13 GB (estimated) |
+| `kontext-dev` | [FLUX.1 Kontext [dev]](https://huggingface.co/black-forest-labs/FLUX.1-Kontext-dev) 12B, May 2025, 28 steps | non-commercial, gated | 34 GB | ~15 GB (estimated) |
+
+Before anything loads, the run estimates the model's peak memory. If it's more than this
+machine's RAM minus ~3 GB for the system, it stops with an explanation (heavy swapping can
+freeze or crash the machine); `--refine-force` runs it anyway. If it fits but is more than is
+free right now, it logs a warning. Gated models need `env/bin/hf auth login` and accepting the
+licence on the model's page. Only `klein-4b` has been run here; the others are wired up the same
+way but untested.
+
 ### Setup (one time)
 
 The packages come with `requirements.txt`; the model is a separate, optional download
-(about 16 GB):
+(about 16 GB for the default):
 
 ```sh
-./setup.sh --refine
+./setup.sh --refine                 # the default model
+./setup.sh --refine=kontext-dev     # another one
 ```
 
 The model goes in the shared Hugging Face cache, `~/.cache/huggingface/hub` (or `$HF_HUB_CACHE`,
@@ -188,15 +206,15 @@ list would fail with `CERTIFICATE_VERIFY_FAILED`. To fetch just the model withou
 `setup.sh` (same files, same place):
 
 ```sh
-HF_HUB_OFFLINE=0 env/bin/python -c 'from rora import refine; refine.download()'
+HF_HUB_OFFLINE=0 env/bin/python -c 'from rora import refine; refine.download("klein-4b")'
 ```
 
 It runs with one of two backends (`--refine-backend`, default `auto`):
 
 | Backend | Used on | Memory |
 |---|---|---|
-| [mflux](https://github.com/mflux-community/mflux) (MLX) | Macs with Apple silicon | peaks around 6 GB at the default 4-bit; `--refine-quantize 8` around 7.5 GB |
-| [diffusers](https://github.com/huggingface/diffusers) (PyTorch) | everything else (CUDA GPU; CPU works but is very slow) | about 16 GB |
+| [mflux](https://github.com/mflux-community/mflux) (MLX) | Macs with Apple silicon | klein 4B: ~8 GB at the default 4-bit, ~12 GB at 8-bit |
+| [diffusers](https://github.com/huggingface/diffusers) (PyTorch) | everything else (CUDA GPU; CPU works but is very slow) | klein 4B: about 20 GB (full precision) |
 
 If the package or the model is missing, the run stops right away with these instructions.
 
@@ -204,13 +222,15 @@ With `--refine` a run works in two phases, so the drawing models and the editing
 in memory together: first every photo is drawn and its original written, then the drawing models
 are released and every drawing is refined with one load of the editing model. With mflux, the
 image is encoded and decoded in tiles and the prompt encoder is only loaded while it's needed.
+A last pass repairs what the tiles can leave along their 64 px blend bands: strokes broken
+across a band are bridged and straight lines along a band are removed (counts in `run.log`).
 On a 16 GB Mac a run peaks around 10 GB (while drawing a photo with several subjects), so it
 fits next to an editor and a browser. 8-bit has occasionally failed on a busy 16 GB Mac with a
 Metal "Impacting Interactivity" error; the original is kept when that happens.
 
 ```sh
-env/bin/python dog_lineart.py img/in/1.jpg -s fineline --refine auto
-env/bin/python dog_lineart.py img/in/1.jpg -s fineline --refine stylize --refine-prompt "thicker outline"
+env/bin/python lineart.py img/in/1.jpg -s fineline --refine auto
+env/bin/python lineart.py img/in/1.jpg -s fineline --refine stylize --refine-prompt "thicker outline"
 ```
 
 Other options: `--refine-seed`, `--refine-quantize` (mflux: 4 (default), 8 or 0 = full precision).
@@ -379,7 +399,7 @@ Specific to each look:
 
 | Path | What |
 |---|---|
-| `dog_lineart.py` | command-line entry point |
+| `lineart.py` | command-line entry point |
 | `rora/` | pipeline package (modules below) |
 | `rora/segment.py` | finds the people, cats and dogs and cuts them out |
 | `rora/features.py`, `rora/facedraw.py` | find and draw eyes, nose, mouth |
