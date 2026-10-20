@@ -53,7 +53,7 @@ The full settings are also embedded in each PNG (text field `dog_lineart_setting
 | `sp` | spacing | `f` | freedom | `seg` | --segmenter |
 | `dt` | dot | `ft` | features | `rf` | --refine (refined files only) |
 | `sd` | seed | `ae` | almond_eyes | `rsd` | --refine-seed |
-| `xh` | crosshatch | `pu` | pupils | `rst` | --refine-strength |
+| `xh` | crosshatch | `pu` | pupils | `rq` | --refine-quantize |
 | `lv` | levels | `ns` | nose_solid | `rp` | --refine-prompt (short hash) |
 | `lt` | light | `mb` | max_blobs | | |
 | `rm` | rim | `dk` | darkness | | |
@@ -140,12 +140,13 @@ env/bin/python dog_lineart.py img/in -o out -s all --style-defaults
 Each takes roughly 20–25 minutes for about 50 photos on an Apple M-series Mac.
 `--no-preview` keeps each run in the loop from overwriting the same `_preview.png`.
 
-## Optional: refine with an image model (Draw Things)
+## Optional: refine with an image-editing model
 
-`--refine` adds a final pass that sends each finished drawing through an image-editing model
-running locally in [Draw Things](https://drawthings.ai), to clean it up or restyle it so it
-clearly reads as a dog. The original is always written; the refined version is written next to
-it with `_rf-<mode>` added to the name (e.g. `1__edges_d0.5_w2_rf-clean.png`).
+`--refine` adds a final pass that runs each finished drawing through the
+[FLUX.2 [klein] 4B](https://huggingface.co/black-forest-labs/FLUX.2-klein-4B) image-editing model
+(Apache-2.0), inside this script, to clean it up or restyle it so it clearly reads as a dog. The
+original is always written; the refined version is written next to it with `_rf-<mode>` added
+to the name (e.g. `1__edges_d0.5_w2_rf-clean.png`).
 
 | Mode | What it does |
 |---|---|
@@ -157,36 +158,31 @@ A refined result is thrown away (and logged) if it looks *less* like a dog than 
 The dog scores (0–1) are in `run.log`; tune `auto` with `--refine-threshold` (default 0.5). The result
 is clipped to the dog's outline, so the model can't add background.
 
-### Setting up Draw Things (one time, macOS on Apple silicon)
+### Setup (one time)
 
-Draw Things is a free Mac app; it can't be installed by `setup.sh`.
+The packages come with `requirements.txt`; the model is a separate, optional download
+(about 16 GB, into `./models` like everything else):
 
-1. Install it from the [Mac App Store](https://apps.apple.com/us/app/draw-things-ai-generation/id6444050820).
-2. Open it, click the model name at the top of the settings panel and download an
-   **image-editing** model:
+```sh
+./setup.sh --refine
+```
 
-   | Model (name in Draw Things) | Notes |
-   |---|---|
-   | FLUX.1 Kontext [dev] | good default; follows instructions and keeps the layout |
-   | Qwen Image Edit 2511 | best at keeping the drawing as it is; larger and slower |
-   | FLUX.2 [klein] 4B | smallest and fastest; a little less faithful |
+It runs with one of two backends (`--refine-backend`, default `auto`):
 
-   Plain text-to-image models (SDXL, FLUX.1 [schnell], ...) ignore the drawing at the default
-   `--refine-strength 1.0`; with them use `--refine-strength 0.3`–`0.6`.
-3. Select the model, then turn on the API server in the app's settings (**API Server**:
-   protocol **HTTP**, port **7860**). Keep the app open while the pipeline runs.
+| Backend | Used on | Memory |
+|---|---|---|
+| [mflux](https://github.com/mflux-community/mflux) (MLX) | Macs with Apple silicon | about 8 GB extra at the default 8-bit; `--refine-quantize 4` for about 4 GB |
+| [diffusers](https://github.com/huggingface/diffusers) (PyTorch) | everything else (CUDA GPU; CPU works but is very slow) | about 16 GB |
 
-If Draw Things isn't running (or the selected model can't edit images) the run stops right away
-with these instructions.
+If the package or the model is missing, the run stops right away with these instructions.
 
 ```sh
 env/bin/python dog_lineart.py img/in/1.jpg -s fineline --refine auto
 env/bin/python dog_lineart.py img/in/1.jpg -s fineline --refine stylize --refine-prompt "thicker outline"
 ```
 
-Other options: `--refine-url` (default `http://127.0.0.1:7860`), `--refine-seed`,
-`--refine-strength`. With `--debug`, the image sent to the model and its raw reply are saved too.
-Steps, guidance and sampler come from the current settings in the Draw Things app.
+Other options: `--refine-seed`, `--refine-quantize` (mflux: 8, 4 or 0 = full precision).
+With `--debug`, the image sent to the model and its raw reply are saved too.
 
 ## Styles
 
@@ -355,7 +351,7 @@ Specific to each look:
 | `rora/edgemaps.py`, `rora/strokes.py`, `rora/cleanup.py` | tattoo passes 1, 2 and 3 |
 | `rora/tattoo.py`, `rora/styles.py` | line looks and other styles |
 | `rora/export.py` | PNG / SVG / preview output |
-| `rora/refine.py` | optional `--refine` pass through Draw Things |
+| `rora/refine.py` | optional `--refine` pass (FLUX.2 [klein] 4B via mflux or diffusers) |
 | `rora/env.py` | keeps model downloads and settings in `./models` |
 | `setup.sh` | one-time setup |
 

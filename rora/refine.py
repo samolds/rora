@@ -1,33 +1,41 @@
-"""Optional final pass: send a finished drawing through an image-editing model running in the
-Draw Things app (https://drawthings.ai) to clean it up or restyle it.
+"""Optional final pass: run a finished drawing through the FLUX.2 [klein] 4B image-editing model
+to clean it up or restyle it, inside this process.
 
-Uses the app's local HTTP API (Automatic1111-compatible `/sdapi/v1/img2img`). The drawing is
-sent as black ink on white, and the result is turned back into an ink mask clipped to the dog,
-so colour, transparency, cropping and SVG export work exactly as for the original.
+Backends: mflux (MLX, Apple silicon) or Hugging Face diffusers (PyTorch; CUDA, or MPS/CPU).
+The drawing is sent as black ink on white, and the result is turned back into an ink mask
+clipped to the dog, so colour, transparency, cropping and SVG export work as for the original.
 """
-import base64
-import io
-import json
+import importlib.util
 import logging
+import platform
+import tempfile
 import time
-import urllib.error
-import urllib.parse
-import urllib.request
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import cv2
 import numpy as np
 from PIL import Image
 
+from . import env  # noqa: F401  (model downloads go to ./models/hf)
+
 log = logging.getLogger(__name__)
 
-DEFAULT_URL = "http://127.0.0.1:7860"
 MODES = ("off", "auto", "clean", "stylize")
-MODEL_SIZE = 1024  # long side sent to the model; the FLUX/Qwen edit models work around 1 MP
-TIMEOUT = 900  # seconds per generation; big models on smaller Macs can take minutes
+BACKENDS = ("auto", "mflux", "diffusers")
+MODEL_NAME = "FLUX.2 [klein] 4B"
+MODEL_REPO = "black-forest-labs/FLUX.2-klein-4B"
+# the commit mflux 0.23 pins, so both backends load the same single download
+MODEL_REVISION = "e7b7dc27f91deacad38e78976d1f2b499d76a294"
+DOWNLOAD_PATTERNS = ["model_index.json", "scheduler/*", "text_encoder/*", "tokenizer/*",
+                     "transformer/*", "vae/*"]
+REQUIRED_FILES = ["model_index.json", "transformer/diffusion_pytorch_model.safetensors",
+                  "text_encoder/model.safetensors.index.json", "tokenizer/tokenizer.json",
+                  "vae/diffusion_pytorch_model.safetensors"]
+DOWNLOAD_GB = 16
+STEPS = 4  # klein 4B is step-distilled
+MODEL_SIZE = 1024  # long side sent to the model; it works around 1 MP
 SCORE_MARGIN = 0.1  # reject a result whose dog score drops by more than this
-# substrings of Draw Things model files that take the input image as an editing reference
-EDIT_MODEL_HINTS = ("kontext", "edit", "klein", "flux_2", "flux_3")
 DOG_QUERIES = {"dog": ["a drawing of a dog", "a line drawing of a dog"]}
 
 PROMPTS = {
@@ -47,19 +55,13 @@ PROMPTS = {
 }
 
 SETUP_HELP = f"""\
-How to set up Draw Things (free; macOS on Apple silicon):
-  1. Install the app from the Mac App Store:
-       https://apps.apple.com/us/app/draw-things-ai-generation/id6444050820
-     (more at https://drawthings.ai)
-  2. Open it, click the model name at the top of the settings panel, and download an
-     image-editing model, for example:
-       - FLUX.1 Kontext [dev]       good default
-       - Qwen Image Edit 2511       best at keeping the drawing as is; bigger and slower
-       - FLUX.2 [klein] 4B          smallest and fastest; a little less faithful
-  3. Select that model, then turn on the API server in the app's settings
-     ("API Server": protocol HTTP, port {urllib.parse.urlsplit(DEFAULT_URL).port}).
-     Keep Draw Things open while the pipeline runs.
-  4. Run again with --refine (add --refine-url if you chose another address or port)."""
+How to set up the refine pass (one time):
+  1. Install the Python packages (mflux on Apple silicon, diffusers elsewhere):
+       env/bin/pip install -r requirements.txt
+  2. Download {MODEL_NAME} (about {DOWNLOAD_GB} GB, into ./models; Apache-2.0 licence):
+       ./setup.sh --refine
+  Memory: about 8 GB extra with mflux at 8-bit (--refine-quantize 4 for about 4 GB);
+  diffusers needs about 16 GB (CUDA VRAM, or unified memory on a Mac)."""
 
 
 class RefineError(RuntimeError):
@@ -73,11 +75,11 @@ def _banner(headline: str, detail: str = SETUP_HELP) -> str:
 
 @dataclass
 class Options:
-    url: str = DEFAULT_URL
+    backend: str = "mflux"  # resolved by check_ready()
     prompt: str = ""  # extra instruction appended to the built-in one
     seed: int = 1
-    strength: float = 1.0  # 1.0 for editing models; 0.3-0.6 for plain image-to-image models
     threshold: float = 0.5  # auto: skip at or above this dog score; restyle below half of it
+    quantize: int = 8  # mflux only: 4 or 8 bit, 0 = full precision
 
 
 @dataclass
@@ -93,76 +95,93 @@ class Result:
     settings: dict = field(default_factory=dict)
 
 
-def _request(url: str, payload: dict | None, timeout: float) -> dict:
-    if urllib.parse.urlsplit(url).scheme not in ("http", "https"):
-        raise RefineError(f"--refine-url must start with http:// or https:// (got {url!r})")
-    data = None if payload is None else json.dumps(payload).encode()
-    req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 (scheme checked)
-        return json.loads(resp.read())
+def is_apple_silicon() -> bool:
+    return platform.system() == "Darwin" and platform.machine() == "arm64"
 
 
-def check_server(url: str, strength: float) -> str:
-    """Make sure Draw Things answers at `url` with a usable model; returns the model file."""
-    url = url.rstrip("/")
-    try:
-        cfg = _request(url + "/", None, timeout=5)
-    except urllib.error.HTTPError as e:
-        raise RefineError(_banner(
-            f"Something answered at {url}, but not like Draw Things (HTTP {e.code}).")) from e
-    except (urllib.error.URLError, OSError) as e:
-        reason = getattr(e, "reason", e)
-        raise RefineError(_banner(
-            f"--refine needs Draw Things, but nothing answered at {url} ({reason}).")) from e
-    except ValueError as e:
-        raise RefineError(_banner(
-            f"Something answered at {url}, but not like Draw Things (no JSON settings).")) from e
+def model_dir() -> Path:
+    from huggingface_hub import constants
 
-    missing = {"prompt", "seed", "width", "height", "strength"} - set(cfg)
+    name = "models--" + MODEL_REPO.replace("/", "--")
+    return Path(constants.HF_HUB_CACHE) / name / "snapshots" / MODEL_REVISION
+
+
+def download():
+    """Fetch the model into the Hugging Face cache under ./models (used by setup.sh --refine)."""
+    from huggingface_hub import snapshot_download
+
+    snapshot_download(MODEL_REPO, revision=MODEL_REVISION, allow_patterns=DOWNLOAD_PATTERNS)
+
+
+def check_ready(backend: str) -> str:
+    """Resolve `auto`, check the package and model are installed; returns the backend name."""
+    if backend == "auto":
+        backend = "mflux" if is_apple_silicon() else "diffusers"
+    if backend == "mflux" and not is_apple_silicon():
+        raise RefineError(_banner(
+            "--refine-backend mflux needs a Mac with Apple silicon; use diffusers here."))
+    if importlib.util.find_spec(backend) is None:
+        raise RefineError(_banner(f"--refine needs the '{backend}' package, which isn't installed."))
+    missing = [f for f in REQUIRED_FILES if not (model_dir() / f).exists()]
     if missing:
         raise RefineError(_banner(
-            f"The server at {url} doesn't look like Draw Things (missing {sorted(missing)}).",
-            "Point --refine-url at the Draw Things HTTP API server.\n\n" + SETUP_HELP))
-    model = str(cfg.get("model") or "?")
-    if strength >= 1 and not any(h in model.lower() for h in EDIT_MODEL_HINTS):
-        raise RefineError(_banner(
-            f"Draw Things is running, but the selected model ({model}) is not an image-editing "
-            "model.",
-            "At --refine-strength 1.0 a plain text-to-image model ignores the drawing entirely.\n"
-            "Select an editing model in Draw Things (see step 2 below), or pass\n"
-            "--refine-strength 0.3 .. 0.6 to use this model as plain image-to-image.\n\n"
-            + SETUP_HELP))
-    return model
+            f"--refine needs the {MODEL_NAME} model, which isn't downloaded yet "
+            f"(missing {missing[0]})."))
+    return backend
 
 
-def _encode_png(rgb: np.ndarray) -> str:
-    buf = io.BytesIO()
-    Image.fromarray(rgb).save(buf, format="PNG")
-    return base64.b64encode(buf.getvalue()).decode()
+_editor = None
 
 
-def _decode_image(data: str) -> np.ndarray:
-    if data.startswith("data:"):
-        data = data.partition(",")[2]
-    return np.asarray(Image.open(io.BytesIO(base64.b64decode(data))).convert("RGB"))
+def _load_editor(opts: Options, device: str):
+    """Load the model once; returns edit(canvas, prompt, seed) -> RGB array."""
+    t = time.perf_counter()
+    if opts.backend == "mflux":
+        from mflux.models.common.config.model_config import ModelConfig
+        from mflux.models.flux2.variants import Flux2KleinEdit
+
+        model = Flux2KleinEdit(quantize=opts.quantize or None,
+                               model_config=ModelConfig.flux2_klein_4b())
+
+        def edit(canvas: np.ndarray, prompt: str, seed: int) -> np.ndarray:
+            h, w = canvas.shape[:2]
+            with tempfile.TemporaryDirectory(prefix="rora_refine_") as d:
+                path = Path(d) / "drawing.png"  # mflux reads reference images from files
+                Image.fromarray(canvas).save(path)
+                out = model.generate_image(seed=seed, prompt=prompt, num_inference_steps=STEPS,
+                                           height=h, width=w, guidance=1.0, image_paths=[path])
+            return np.asarray(out.image.convert("RGB"))
+        where = f"mflux, {opts.quantize}-bit" if opts.quantize else "mflux, full precision"
+    else:
+        import torch
+        from diffusers import Flux2KleinPipeline
+
+        pipe = Flux2KleinPipeline.from_pretrained(MODEL_REPO, revision=MODEL_REVISION,
+                                                  torch_dtype=torch.bfloat16)
+        if device == "cuda":
+            pipe.enable_model_cpu_offload()
+        else:
+            pipe.to(device)
+
+        def edit(canvas: np.ndarray, prompt: str, seed: int) -> np.ndarray:
+            h, w = canvas.shape[:2]
+            img = pipe(image=Image.fromarray(canvas), prompt=prompt, height=h, width=w,
+                       num_inference_steps=STEPS, guidance_scale=1.0,
+                       generator=torch.Generator("cpu").manual_seed(seed)).images[0]
+            return np.asarray(img.convert("RGB"))
+        where = f"diffusers on {device}"
+    log.info("  loaded %s (%s) in %.1fs", MODEL_NAME, where, time.perf_counter() - t)
+    return edit
 
 
-def _generate(url: str, canvas: np.ndarray, prompt: str, opts: Options) -> np.ndarray:
-    h, w = canvas.shape[:2]
-    payload = {"prompt": prompt, "seed": opts.seed, "width": w, "height": h,
-               "strength": opts.strength, "batch_count": 1, "init_images": [_encode_png(canvas)]}
+def _generate(canvas: np.ndarray, prompt: str, opts: Options, device: str) -> np.ndarray:
+    global _editor
     try:
-        resp = _request(url.rstrip("/") + "/sdapi/v1/img2img", payload, TIMEOUT)
-    except urllib.error.HTTPError as e:
-        detail = e.read().decode(errors="replace")[:500]
-        raise RefineError(f"Draw Things rejected the request (HTTP {e.code}): {detail}") from e
-    except (urllib.error.URLError, OSError) as e:
-        raise RefineError(_banner(
-            f"Lost the connection to Draw Things at {url} ({getattr(e, 'reason', e)}).")) from e
-    images = resp.get("images") or []
-    if not images:
-        raise RefineError(f"Draw Things returned no image: {str(resp)[:300]}")
-    return _decode_image(images[0])
+        if _editor is None:
+            _editor = _load_editor(opts, device)
+        return _editor(canvas, prompt, opts.seed)
+    except Exception as e:  # out of memory, missing files, ...: report it, keep the original
+        raise RefineError(f"{MODEL_NAME} via {opts.backend} failed: {type(e).__name__}: {e}") from e
 
 
 @dataclass
@@ -219,8 +238,9 @@ def dog_score(finder, canvas: np.ndarray) -> float:
     return max((d.score for d in dets), default=0.0)
 
 
-def refine(ink: np.ndarray, mask: np.ndarray, mode: str, finder, opts: Options) -> Result:
-    """Run one drawing through Draw Things. `mode` is auto, clean or stylize."""
+def refine(ink: np.ndarray, mask: np.ndarray, mode: str, finder, opts: Options,
+           device: str) -> Result:
+    """Run one drawing through the editing model. `mode` is auto, clean or stylize."""
     t = time.perf_counter()
     fr = _frame(mask, MODEL_SIZE)
     sent = to_canvas(ink, fr)
@@ -231,7 +251,7 @@ def refine(ink: np.ndarray, mask: np.ndarray, mode: str, finder, opts: Options) 
         mode = "clean" if before >= opts.threshold / 2 else "stylize"
 
     prompt = PROMPTS[mode] + (" " + opts.prompt.strip() if opts.prompt.strip() else "")
-    raw = _generate(opts.url, sent, prompt, opts)
+    raw = _generate(sent, prompt, opts, device)
 
     size = max(fr.y1 - fr.y0, fr.x1 - fr.x0)
     r = int(0.02 * size) + 2
@@ -242,7 +262,8 @@ def refine(ink: np.ndarray, mask: np.ndarray, mode: str, finder, opts: Options) 
 
     res = Result(mode, before, after, new, sent=sent, raw=raw,
                  settings={"refine": mode, "refine_prompt": opts.prompt, "refine_seed": opts.seed,
-                           "refine_strength": opts.strength,
+                           "refine_model": MODEL_REPO, "refine_backend": opts.backend,
+                           "refine_quantize": opts.quantize if opts.backend == "mflux" else None,
                            "refine_score_before": round(before, 3),
                            "refine_score_after": round(after, 3)})
     if new.sum() < 0.001 * mask.sum():

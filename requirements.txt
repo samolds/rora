@@ -1,8 +1,14 @@
 ultralytics>=8.3.0
 torch>=2.3
-opencv-python>=4.9
+# mflux needs OpenCV 4; keep both OpenCV wheels on the same major version (they share cv2)
+opencv-python>=4.9,<5
+opencv-python-headless>=4.9,<5
 numpy>=1.26
-Pillow>=10.0
+# Pillow 13's PIL._typing fails to import on Python 3.12 (mflux imports it)
+Pillow>=10.0,<13
 controlnet-aux>=0.0.10
 scikit-image>=0.22
 transformers>=4.40
+# optional --refine pass (FLUX.2 [klein] 4B): mflux on Apple silicon, diffusers elsewhere
+mflux>=0.23; sys_platform == "darwin" and platform_machine == "arm64"
+diffusers>=0.41

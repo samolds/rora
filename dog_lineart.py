@@ -47,7 +47,7 @@ ABBREV = {
     "outline": "ol", "antialias": "aa", "work_size": "ws", "min_conf": "mc",
     "detector": "det", "segmenter": "seg",
     # refine pass (only in refined files' names)
-    "refine": "rf", "refine_seed": "rsd", "refine_strength": "rst", "refine_prompt": "rp",
+    "refine": "rf", "refine_seed": "rsd", "refine_quantize": "rq", "refine_prompt": "rp",
 }
 assert len(set(ABBREV.values())) == len(ABBREV), "file-name abbreviations must be unique"
 
@@ -91,7 +91,7 @@ def refine_tag(mode: str, args) -> str:
     """File name suffix for a refined result, e.g. `rf-clean` or `rf-stylize_rsd7`."""
     cli_defaults = vars(parse_args([]))
     parts = [fmt("refine", mode)]
-    parts += [fmt(k, getattr(args, k)) for k in ("refine_seed", "refine_strength")
+    parts += [fmt(k, getattr(args, k)) for k in ("refine_seed", "refine_quantize")
               if getattr(args, k) != cli_defaults[k]]
     if args.refine_prompt.strip():
         digest = hashlib.sha1(args.refine_prompt.strip().encode()).hexdigest()[:6]
@@ -141,19 +141,19 @@ def parse_args(argv=None):
     g.add_argument("--detector", default="yolo11x.pt")
     g.add_argument("--segmenter", default="sam2.1_b.pt")
 
-    g = ap.add_argument_group("refine (optional final pass through an image model in Draw Things)")
+    g = ap.add_argument_group(f"refine (optional final pass through the {refine.MODEL_NAME} "
+                              "image-editing model)")
     g.add_argument("--refine", choices=refine.MODES, default="off",
                    help="clean = light touch-up, stylize = redraw more clearly, auto = skip "
                         "drawings that already look like a dog, otherwise clean or stylize "
                         "(default: off). Writes the refined file next to the original")
-    g.add_argument("--refine-url", default=refine.DEFAULT_URL,
-                   help="Draw Things HTTP API server (default: %(default)s)")
+    g.add_argument("--refine-backend", choices=refine.BACKENDS, default="auto",
+                   help="auto = mflux on Apple silicon, diffusers elsewhere")
+    g.add_argument("--refine-quantize", type=int, choices=(0, 4, 8), default=8,
+                   help="mflux weight precision in bits; 4 uses less memory, 0 = full (default: 8)")
     g.add_argument("--refine-prompt", default="",
                    help="extra instruction added to the built-in one, e.g. 'thicker outline'")
     g.add_argument("--refine-seed", type=int, default=1)
-    g.add_argument("--refine-strength", type=float, default=1.0,
-                   help="1.0 for editing models (Kontext, Qwen Image Edit, FLUX.2 klein); "
-                        "0.3-0.6 for plain image-to-image models")
     g.add_argument("--refine-threshold", type=float, default=0.5,
                    help="auto: skip drawings whose dog score is at least this; below half of "
                         "it, stylize instead of clean (scores are in run.log)")
@@ -247,13 +247,13 @@ def main(argv=None) -> int:
     refine_opts = None
     if args.refine != "off":
         try:
-            model = refine.check_server(args.refine_url, args.refine_strength)
+            backend = refine.check_ready(args.refine_backend)
         except refine.RefineError as e:
             log.error("%s", e)
             return 2
-        refine_opts = refine.Options(args.refine_url, args.refine_prompt, args.refine_seed,
-                                     args.refine_strength, args.refine_threshold)
-        log.info("Refine: %s via Draw Things at %s, model %s", args.refine, args.refine_url, model)
+        refine_opts = refine.Options(backend, args.refine_prompt, args.refine_seed,
+                                     args.refine_threshold, args.refine_quantize)
+        log.info("Refine: %s with %s via %s", args.refine, refine.MODEL_NAME, backend)
 
     seg = DogSegmenter(args.device, args.detector, args.segmenter, args.min_conf)
     previews, written, skipped = [], 0, []
@@ -300,7 +300,8 @@ def main(argv=None) -> int:
                     if refine_opts:
                         finder = tattoo.get_finder(seg.device)
                         try:
-                            r = refine.refine(ink, dog.mask, args.refine, finder, refine_opts)
+                            r = refine.refine(ink, dog.mask, args.refine, finder, refine_opts,
+                                              seg.device)
                         except refine.RefineError as e:
                             log.error("  refine failed, keeping only the original: %s", e)
                             continue
