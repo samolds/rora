@@ -13,7 +13,7 @@ import cv2
 import numpy as np
 
 from rora import export, refine, styles, tattoo
-from rora.segment import SUBJECTS, Segmenter, load_image
+from rora.segment import COCO_KINDS, SUBJECTS, Segmenter, describe, load_image
 
 log = logging.getLogger("dog_lineart")
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".heic", ".webp", ".tif", ".tiff"}
@@ -45,7 +45,7 @@ ABBREV = {
     # output options
     "color": "col", "size": "px", "dpi": "dpi", "pad": "pad", "min_speck": "spk",
     "outline": "ol", "antialias": "aa", "work_size": "ws", "min_conf": "mc",
-    "detector": "det", "segmenter": "seg", "subject": "sub",
+    "detector": "det", "segmenter": "seg",
     # refine pass (only in refined files' names)
     "refine": "rf", "refine_seed": "rsd", "refine_quantize": "rq", "refine_prompt": "rp",
 }
@@ -79,7 +79,9 @@ def settings_id(name: str, overrides: dict, args) -> tuple[str, str]:
     parts = [name, fmt("detail", used["detail"]), fmt("weight", used["weight"])]
     parts += [fmt(k, v) for k, v in sorted(used.items())
               if k not in ("detail", "weight") and v != baseline.get(k)]
-    parts += [fmt(k, v) for k, v in sorted(out_opts.items()) if v != cli_defaults[k]]
+    # the subject shows up in file names as a suffix instead (see subject_groups)
+    parts += [fmt(k, v) for k, v in sorted(out_opts.items())
+              if v != cli_defaults[k] and k != "subject"]
 
     full = {"style": name, **used, **out_opts}
     full = {k: float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else v
@@ -136,9 +138,15 @@ def parse_args(argv=None):
     g = ap.add_argument_group("detection")
     g.add_argument("--work-size", type=int, default=2500, help="processing size, long side px")
     g.add_argument("--min-conf", type=float, default=0.35, help="detection confidence")
-    g.add_argument("--subject", choices=SUBJECTS, default="auto",
-                   help="what to draw: auto = the main person, cat or dog in each photo "
-                        "(biggest, most central); or only consider that kind (default: auto)")
+    g.add_argument("--subject", choices=SUBJECTS, default="all",
+                   help="what to draw: all = every person, cat and dog detected with at least "
+                        "--subject-conf confidence, together in one drawing; auto = only the "
+                        "main one (biggest, most central), adds e.g. _dog to the file name; "
+                        "person / cat / dog = each one of that kind in its own file (_dog, or "
+                        "_dog1, _dog2 ... if there are several) (default: all)")
+    g.add_argument("--subject-conf", type=float, default=0.8,
+                   help="confidence needed to draw subjects besides the main one, which is "
+                        "always drawn (default: 0.8)")
     g.add_argument("--device", default="auto", help="auto | mps | cuda | cpu")
     g.add_argument("--detector", default="yolo11x.pt")
     g.add_argument("--segmenter", default="sam2.1_b.pt")
@@ -220,6 +228,89 @@ def save_outputs(args, ink: np.ndarray, stem: str, settings: str):
     return img, msg
 
 
+def subject_groups(subjects: list, mode: str) -> list[tuple[str, list]]:
+    """(file name suffix, subjects drawn together) per output: `all` draws everything in one
+    file with no suffix; `auto` and a kind add the kind, numbered if there are several."""
+    if mode == "all":
+        return [("", subjects)]
+    if len(subjects) == 1:
+        return [(f"_{subjects[0].kind}", subjects)]
+    return [(f"_{s.kind}{i}", [s]) for i, s in enumerate(subjects, 1)]
+
+
+def draw_subjects(args, photo: str, rgb, subjects, names, ids, overrides, refine_opts, device,
+                  previews: list) -> int:
+    """Draw the subjects together in every style (plus refined versions); returns files written."""
+    mask = np.logical_or.reduce([s.mask for s in subjects])
+    kinds, written = [s.kind for s in subjects], 0
+    if args.debug:
+        cut = rgb.copy()
+        cut[~mask] = 0
+        cv2.imwrite(str(args.out / f"{photo}_debug_mask.png"), mask.astype(np.uint8) * 255)
+        cv2.imwrite(str(args.out / f"{photo}_debug_cutout.jpg"),
+                    cv2.cvtColor(cut, cv2.COLOR_RGB2BGR))
+
+    # each subject is drawn on its own (own face, own outline) and the drawings are combined;
+    # subjects on the outside so the tattoo passes' per-subject cache is reused across styles
+    inks = {name: np.zeros(mask.shape, bool) for name in names}
+    secs = dict.fromkeys(names, 0.0)
+    for s in subjects:
+        for name in names:
+            t = time.perf_counter()
+            inks[name] |= styles.render(name, rgb, s.mask, args.color == "white",
+                                        {**overrides, "subject": s.kind})
+            secs[name] += time.perf_counter() - t
+
+    for name in names:
+        t = time.perf_counter() - secs[name]
+        ink = inks[name]
+        if args.outline:
+            ink |= styles.silhouette(mask, args.outline)
+        ink = export.despeckle(ink, args.min_speck)
+        out = export.crop_and_resize(ink, mask, args.pad, args.size)
+
+        tag, settings = ids[name]
+        settings = json.dumps({**json.loads(settings), "subjects": describe(kinds)},
+                              sort_keys=True)
+        stem = f"{photo}__{tag}"
+        img, msg = save_outputs(args, out, stem, settings)
+        log.info("  %s: %s, ink %.0f%% (%.1fs)", name, msg, 100 * out.mean(),
+                 time.perf_counter() - t)
+        previews.append((stem, img))
+        written += 1
+
+        if not refine_opts:
+            continue
+        try:
+            r = refine.refine(ink, mask, kinds, args.refine, tattoo.get_finder(device),
+                              refine_opts, device)
+        except refine.RefineError as e:
+            log.error("  refine failed, keeping only the original: %s", e)
+            continue
+        if r.mode == "skip":
+            log.info("  refine: score %.2f >= %.2f, skipped", r.score_before,
+                     args.refine_threshold)
+            continue
+        rstem = f"{stem}_{refine_tag(r.mode, args)}"
+        if args.debug:
+            cv2.imwrite(str(args.out / f"{rstem}_debug_sent.png"), r.sent)
+            cv2.imwrite(str(args.out / f"{rstem}_debug_raw.png"),
+                        cv2.cvtColor(r.raw, cv2.COLOR_RGB2BGR))
+        if r.ink is None:
+            log.warning("  refine (%s) rejected, %s; keeping only the original", r.mode,
+                        r.rejected)
+            continue
+        rout = export.despeckle(r.ink, args.min_speck)
+        rout = export.crop_and_resize(rout, mask, args.pad, args.size)
+        rsettings = json.dumps({**json.loads(settings), **r.settings}, sort_keys=True)
+        rimg, rmsg = save_outputs(args, rout, rstem, rsettings)
+        log.info("  refine (%s): %s, score %.2f -> %.2f (%.1fs)", r.mode, rmsg,
+                 r.score_before, r.score_after, r.seconds)
+        previews.append((rstem, rimg))
+        written += 1
+    return written
+
+
 def main(argv=None) -> int:
     args = parse_args(argv)
     if args.list_styles:
@@ -265,69 +356,18 @@ def main(argv=None) -> int:
         log.info("[%d/%d] %s", i, len(files), path.name)
         try:
             rgb = load_image(path, args.work_size)
-            subject = seg.find_subject(rgb, args.subject)
-            if subject is None:
-                log.warning("  no %s found, skipping",
-                            "person, cat or dog" if args.subject == "auto" else args.subject)
+            subjects = seg.find_subjects(rgb, args.subject, args.subject_conf)
+            if not subjects:
+                log.warning("  no %s found, skipping", args.subject
+                            if args.subject in COCO_KINDS.values() else "person, cat or dog")
                 skipped.append(path.name)
                 continue
-            mask = subject.mask
 
-            if args.debug:
-                cut = rgb.copy()
-                cut[~mask] = 0
-                cv2.imwrite(str(args.out / f"{path.stem}_debug_mask.png"),
-                            mask.astype(np.uint8) * 255)
-                cv2.imwrite(str(args.out / f"{path.stem}_debug_cutout.jpg"),
-                            cv2.cvtColor(cut, cv2.COLOR_RGB2BGR))
-
-            for name in names:
-                t = time.perf_counter()
-                ink = styles.render(name, rgb, mask, args.color == "white",
-                                    {**overrides, "subject": subject.kind})
-                if args.outline:
-                    ink |= styles.silhouette(mask, args.outline)
-                ink = export.despeckle(ink, args.min_speck)
-                out = export.crop_and_resize(ink, mask, args.pad, args.size)
-
-                tag, settings = ids[name]
-                stem = f"{path.stem}__{tag}"
-                img, msg = save_outputs(args, out, stem, settings)
-                log.info("  %s: %s, ink %.0f%% (%.1fs)", name, msg, 100 * out.mean(),
-                         time.perf_counter() - t)
-                previews.append((stem, img))
-                written += 1
-
-                if refine_opts:
-                    finder = tattoo.get_finder(seg.device)
-                    try:
-                        r = refine.refine(ink, mask, subject.kind, args.refine, finder,
-                                          refine_opts, seg.device)
-                    except refine.RefineError as e:
-                        log.error("  refine failed, keeping only the original: %s", e)
-                        continue
-                    if r.mode == "skip":
-                        log.info("  refine: %s score %.2f >= %.2f, skipped", subject.kind,
-                                 r.score_before, args.refine_threshold)
-                        continue
-                    rstem = f"{stem}_{refine_tag(r.mode, args)}"
-                    if args.debug:
-                        cv2.imwrite(str(args.out / f"{rstem}_debug_sent.png"), r.sent)
-                        cv2.imwrite(str(args.out / f"{rstem}_debug_raw.png"),
-                                    cv2.cvtColor(r.raw, cv2.COLOR_RGB2BGR))
-                    if r.ink is None:
-                        log.warning("  refine (%s) rejected, %s; keeping only the original",
-                                    r.mode, r.rejected)
-                        continue
-                    rout = export.despeckle(r.ink, args.min_speck)
-                    rout = export.crop_and_resize(rout, mask, args.pad, args.size)
-                    rsettings = json.dumps({**json.loads(settings), **r.settings},
-                                           sort_keys=True)
-                    rimg, rmsg = save_outputs(args, rout, rstem, rsettings)
-                    log.info("  refine (%s): %s, %s score %.2f -> %.2f (%.1fs)", r.mode, rmsg,
-                             subject.kind, r.score_before, r.score_after, r.seconds)
-                    previews.append((rstem, rimg))
-                    written += 1
+            for sub_tag, group in subject_groups(subjects, args.subject):
+                log.info("  drawing %s%s", describe([s.kind for s in group]),
+                         f" -> {path.stem}{sub_tag}" if sub_tag else "")
+                written += draw_subjects(args, path.stem + sub_tag, rgb, group, names, ids,
+                                         overrides, refine_opts, seg.device, previews)
         except Exception as e:  # keep the batch going; one bad photo shouldn't stop the run
             log.exception("  failed: %s", e)
             skipped.append(path.name)

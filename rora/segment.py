@@ -13,7 +13,7 @@ from . import env
 log = logging.getLogger(__name__)
 
 COCO_KINDS = {0: "person", 15: "cat", 16: "dog"}
-SUBJECTS = ("auto", *COCO_KINDS.values())
+SUBJECTS = ("all", "auto", *COCO_KINDS.values())
 
 
 @dataclass
@@ -90,10 +90,13 @@ class Segmenter:
         self.segmenter = SAM(segmenter)
         log.info("Models loaded in %.1fs", time.perf_counter() - t)
 
-    def find_subject(self, rgb: np.ndarray, subject: str = "auto") -> Subject | None:
-        """The main subject (or the main one of kind `subject`), or None if there is none."""
+    def find_subjects(self, rgb: np.ndarray, subject: str = "all",
+                      all_conf: float = 0.8) -> list[Subject]:
+        """Subjects, main one first: the main one plus every other detected with at least
+        `all_conf` confidence (`all`: any person, cat or dog; a kind: only that kind), or
+        just the main one (`auto`)."""
         bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
-        classes = [c for c, k in COCO_KINDS.items() if subject in ("auto", k)]
+        classes = [c for c, k in COCO_KINDS.items() if subject in ("all", "auto", k)]
 
         t = time.perf_counter()
         det = self.detector(bgr, classes=classes, conf=self.min_conf, agnostic_nms=True,
@@ -104,13 +107,34 @@ class Segmenter:
         log.info("  detect: %s in %.1fs", ", ".join(f"{k} {s:.2f}" for k, s in zip(kinds, scores))
                  or "nothing", time.perf_counter() - t)
         if not boxes:
-            return None
-        i = max(range(len(boxes)), key=lambda j: prominence(boxes[j], scores[j], rgb.shape))
+            return []
+        order = sorted(range(len(boxes)), key=lambda j: prominence(boxes[j], scores[j], rgb.shape),
+                       reverse=True)
+        if subject == "auto":
+            order = order[:1]
+        else:
+            order = order[:1] + [j for j in order[1:] if scores[j] >= all_conf]
         if len(boxes) > 1:
-            log.info("  main subject: %s %.2f", kinds[i], scores[i])
+            log.info("  drawing: %s", ", ".join(f"{kinds[j]} {scores[j]:.2f}" for j in order))
 
         t = time.perf_counter()
-        seg = self.segmenter(bgr, bboxes=[boxes[i]], device=self.device, verbose=False)[0]
-        mask = clean_mask(seg.masks.data[0].cpu().numpy() > 0.5)
+        seg = self.segmenter(bgr, bboxes=[boxes[j] for j in order], device=self.device,
+                             verbose=False)[0]
+        masks = seg.masks.data.cpu().numpy() > 0.5
         log.info("  segment: %.1fs", time.perf_counter() - t)
-        return Subject(mask, tuple(boxes[i]), scores[i], kinds[i])
+        return [Subject(clean_mask(m), tuple(boxes[j]), scores[j], kinds[j])
+                for m, j in zip(masks, order)]
+
+    def find_subject(self, rgb: np.ndarray, subject: str = "auto") -> Subject | None:
+        """The main subject (or the main one of kind `subject`), or None if there is none."""
+        found = self.find_subjects(rgb, "auto" if subject == "all" else subject)
+        return found[0] if found else None
+
+
+def describe(kinds: list[str]) -> str:
+    """Plain-English list of subjects, e.g. 'a dog', 'two people and a cat'."""
+    counts = {k: kinds.count(k) for k in dict.fromkeys(kinds)}
+    plural = {"person": "people", "cat": "cats", "dog": "dogs"}
+    words = {1: "a", 2: "two", 3: "three", 4: "four", 5: "five"}
+    parts = [f"{words.get(n, n)} {k if n == 1 else plural[k]}" for k, n in counts.items()]
+    return parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + " and " + parts[-1]

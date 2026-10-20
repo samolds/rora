@@ -1,11 +1,13 @@
 # rora
 
-Turn photos of a dog, cat or person into print-ready line art: a transparent PNG (and optional
-SVG) of just that subject, drawn in white lines for printing on dark shirts.
+Turn photos of dogs, cats and people into print-ready line art: a transparent PNG (and optional
+SVG) of just the subjects, drawn in white lines for printing on dark shirts.
 
-The pipeline finds the main subject of each photo (the biggest, most central person, cat or
-dog; everything else, including other people and pets, is left out), cuts it out, and draws it
-in one of several styles, including minimalist tattoo-style line art.
+The pipeline finds the people, cats and dogs in each photo, cuts them out, and draws them in
+one of several styles, including minimalist tattoo-style line art. By default every subject
+detected with high confidence is drawn, all together in one image; `--subject auto` draws only
+the main one (the biggest, most central), and `--subject dog` (or `cat`, `person`) draws each
+one of that kind in its own image.
 
 ## Sam's Favorite run config
 
@@ -30,7 +32,9 @@ Then add your own photos to `img/in/` and run `env/bin/python dog_lineart.py --p
 Results go to `img/out/`, including `_preview.png` (every result on a dark background) and `run.log`.
 
 Output files are named `<photo>__<style>_d<detail>_w<weight>[_<other settings>].png`, e.g.
-`1__edges_d0.4_w1.png`. Besides detail and weight, only settings that differ from a normal
+`1__edges_d0.4_w1.png`. With `--subject auto` or a kind, the subject is added after the photo
+name: `1_dog__edges_d0.4_w1.png`, or `1_dog1__...`, `1_dog2__...` when there are several.
+Besides detail and weight, only settings that differ from a normal
 run's defaults are added, in short form (e.g. `1__fineline_d0.5_w3_f0.7` for `--set freedom=0.7`).
 Re-running with the same settings overwrites the same file; different settings make a new one.
 The full settings are also embedded in each PNG (text field `dog_lineart_settings`) and SVG
@@ -52,11 +56,11 @@ The full settings are also embedded in each PNG (text field `dog_lineart_setting
 | `cl` | cell | `sm` | smooth | `mc` | --min-conf |
 | `a` | angle | `eb` | edge_band | `det` | --detector |
 | `sp` | spacing | `f` | freedom | `seg` | --segmenter |
-| `dt` | dot | `ft` | features | `sub` | --subject |
-| `sd` | seed | `ae` | almond_eyes | `rf` | --refine (refined files only) |
-| `xh` | crosshatch | `pu` | pupils | `rsd` | --refine-seed |
-| `lv` | levels | `ns` | nose_solid | `rq` | --refine-quantize |
-| `lt` | light | `mb` | max_blobs | `rp` | --refine-prompt (short hash) |
+| `dt` | dot | `ft` | features | `rf` | --refine (refined files only) |
+| `sd` | seed | `ae` | almond_eyes | `rsd` | --refine-seed |
+| `xh` | crosshatch | `pu` | pupils | `rq` | --refine-quantize |
+| `lv` | levels | `ns` | nose_solid | `rp` | --refine-prompt (short hash) |
+| `lt` | light | `mb` | max_blobs | | |
 | `rm` | rim | `dk` | darkness | | |
 | `la` | light_angle | `or` | outline_ratio | | |
 | `gr` | grain | `tp` | taper | | |
@@ -102,8 +106,10 @@ python dog_lineart.py --list-styles
 
 Useful options: `--detail 0..1` (how much is drawn), `--weight N` (line width),
 `--set key=value` (any style setting), `--size` / `--dpi` (print size, default
-3600 px at 300 DPI = 12"), `--svg`, `--no-preview`, `--debug` (saves the subject's cut-out),
-`--subject dog|cat|person` (only consider that kind; default `auto` picks the main subject).
+3600 px at 300 DPI = 12"), `--svg`, `--no-preview`, `--debug` (saves each subject's cut-out),
+`--subject all|auto|dog|cat|person` (default `all`: every person, cat and dog detected with at
+least `--subject-conf` 0.8 confidence, plus the main one, together in one image; `auto`: only
+the main subject; a kind: each one of that kind, in its own image).
 Run `python dog_lineart.py --help` for the full list.
 
 With no options, `python dog_lineart.py` runs every photo in `img/in/` with:
@@ -205,8 +211,10 @@ features (eyes, nose, mouth, ears, feet) with no shading.
 
 ## How the tattoo styles work
 
-1. **Find the subject**: YOLO detects people, cats and dogs; the biggest, most central one is
-   the subject (one output file per photo, per style) and SAM 2 cuts it out.
+1. **Find the subjects**: YOLO detects people, cats and dogs and SAM 2 cuts each one out.
+   The biggest, most central one is the main subject; others need at least `--subject-conf`
+   confidence. Each subject is drawn on its own (its own face and outline); with the default
+   `--subject all` the drawings are then combined into one image.
    YOLO sometimes labels a curled-up dog as a cat; `--subject dog` avoids that.
 2. **Find the face**: OWLv2 finds the head, then the eyes, nose and mouth in a zoomed-in
    crop (with wording for the subject's kind); SAM 2 traces each one's exact shape.
@@ -349,7 +357,7 @@ Specific to each look:
 |---|---|
 | `dog_lineart.py` | command-line entry point |
 | `rora/` | pipeline package (modules below) |
-| `rora/segment.py` | finds the main subject (person, cat or dog) and cuts it out |
+| `rora/segment.py` | finds the people, cats and dogs and cuts them out |
 | `rora/features.py`, `rora/facedraw.py` | find and draw eyes, nose, mouth |
 | `rora/depth.py` | depth estimate and form lines (volume) |
 | `rora/edgemaps.py`, `rora/strokes.py`, `rora/cleanup.py` | tattoo passes 1, 2 and 3 |

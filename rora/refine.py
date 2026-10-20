@@ -18,6 +18,7 @@ import numpy as np
 from PIL import Image
 
 from . import env  # noqa: F401  (model downloads go to ./models/hf)
+from .segment import describe
 
 log = logging.getLogger(__name__)
 
@@ -42,16 +43,16 @@ FORM_LINES = {"dog": "ears, legs and fur direction", "cat": "ears, legs and fur 
 
 PROMPTS = {
     "clean": (
-        "Clean up this black ink drawing of a {kind}. Keep exactly the same {kind}, pose, "
+        "Clean up this black ink drawing of {desc}. Keep exactly the same subjects, poses, "
         "proportions, framing, drawing style and line thickness. Remove stray marks and tiny "
         "broken fragments, join lines that are broken and smooth wobbly lines. Black ink on a "
         "plain white background only: no shading, no fill, no colour, no text, no new details."
     ),
     "stylize": (
-        "Redraw this black ink drawing of a {kind} more clearly, in the same drawing style, pose, "
-        "proportions and framing. Make it unmistakably a {kind}: a confident continuous outline, "
-        "clearly drawn eyes, nose and mouth, and only a few interior lines for {form}. Black ink "
-        "on a plain white background only: no shading, no fill, no colour, no text."
+        "Redraw this black ink drawing of {desc} more clearly, in the same drawing style, poses, "
+        "proportions and framing. Make it unmistakably {desc}: confident continuous outlines, "
+        "clearly drawn eyes, noses and mouths, and only a few interior lines for {form}. Black "
+        "ink on a plain white background only: no shading, no fill, no colour, no text."
     ),
 }
 
@@ -232,28 +233,35 @@ def from_canvas(rgb: np.ndarray, fr: _Frame, shape: tuple[int, int], keep: np.nd
     return out & keep
 
 
-def subject_score(finder, canvas: np.ndarray, kind: str) -> float:
-    """How much OWLv2 thinks the drawing shows a `kind` (0 if below its detection floor)."""
-    queries = {kind: [f"a drawing of a {kind}", f"a line drawing of a {kind}"]}
+def subject_score(finder, canvas: np.ndarray, kinds: list[str]) -> float:
+    """How much OWLv2 thinks the drawing shows each kind in `kinds` (the weakest one counts;
+    0 if below its detection floor)."""
     # OWLv2 barely reacts to crisp thin lines; a slight blur makes scores stable across line weights
-    dets = finder.detect(cv2.GaussianBlur(canvas, (0, 0), 2), queries)
-    return max((d.score for d in dets), default=0.0)
+    blurred = cv2.GaussianBlur(canvas, (0, 0), 2)
+    scores = []
+    for kind in dict.fromkeys(kinds):
+        queries = {kind: [f"a drawing of a {kind}", f"a line drawing of a {kind}"]}
+        dets = finder.detect(blurred, queries)
+        scores.append(max((d.score for d in dets), default=0.0))
+    return min(scores)
 
 
-def refine(ink: np.ndarray, mask: np.ndarray, kind: str, mode: str, finder, opts: Options,
+def refine(ink: np.ndarray, mask: np.ndarray, kinds: list[str], mode: str, finder, opts: Options,
            device: str) -> Result:
-    """Run one drawing of a `kind` (dog, cat, person) through the editing model.
+    """Run one drawing of `kinds` (e.g. ["person", "dog"]) through the editing model.
     `mode` is auto, clean or stylize."""
     t = time.perf_counter()
+    desc = describe(kinds)
     fr = _frame(mask, MODEL_SIZE)
     sent = to_canvas(ink, fr)
-    before = subject_score(finder, sent, kind)
+    before = subject_score(finder, sent, kinds)
     if mode == "auto":
         if before >= opts.threshold:
             return Result("skip", before, seconds=time.perf_counter() - t)
         mode = "clean" if before >= opts.threshold / 2 else "stylize"
 
-    prompt = PROMPTS[mode].format(kind=kind, form=FORM_LINES[kind])
+    form = "; ".join(dict.fromkeys(FORM_LINES[k] for k in kinds))
+    prompt = PROMPTS[mode].format(desc=desc, form=form)
     if opts.prompt.strip():
         prompt += " " + opts.prompt.strip()
     raw = _generate(sent, prompt, opts, device)
@@ -263,11 +271,11 @@ def refine(ink: np.ndarray, mask: np.ndarray, kind: str, mode: str, finder, opts
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1))
     keep = cv2.dilate((mask | ink).astype(np.uint8), kernel) > 0
     new = from_canvas(raw, fr, mask.shape, keep)
-    after = subject_score(finder, to_canvas(new, fr), kind)
+    after = subject_score(finder, to_canvas(new, fr), kinds)
 
     res = Result(mode, before, after, new, sent=sent, raw=raw,
                  settings={"refine": mode, "refine_prompt": opts.prompt, "refine_seed": opts.seed,
-                           "refine_subject": kind,
+                           "refine_subject": desc,
                            "refine_model": MODEL_REPO, "refine_backend": opts.backend,
                            "refine_quantize": opts.quantize if opts.backend == "mflux" else None,
                            "refine_score_before": round(before, 3),
@@ -275,6 +283,6 @@ def refine(ink: np.ndarray, mask: np.ndarray, kind: str, mode: str, finder, opts
     if new.sum() < 0.001 * mask.sum():
         res.ink, res.rejected = None, "the result is (almost) empty"
     elif after < before - SCORE_MARGIN:
-        res.ink, res.rejected = None, f"it looks less like a {kind} ({before:.2f} -> {after:.2f})"
+        res.ink, res.rejected = None, f"it looks less like {desc} ({before:.2f} -> {after:.2f})"
     res.seconds = time.perf_counter() - t
     return res
