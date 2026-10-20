@@ -75,7 +75,8 @@ On/off settings appear as just the short name when on (e.g. `aa`), or with `0` w
 Each image is cropped to its drawn lines with an even transparent margin (`--pad`, default
 3% of the drawing's size).
 
-Everything (virtual env, model weights, caches) stays inside this folder.
+Everything (virtual env, model weights, caches) stays inside this folder, except the optional
+`--refine` model, which goes in the shared Hugging Face cache (see below).
 To uninstall, delete the folder.
 
 ## Usage
@@ -169,10 +170,25 @@ The result is clipped to the subject's outline, so the model can't add backgroun
 ### Setup (one time)
 
 The packages come with `requirements.txt`; the model is a separate, optional download
-(about 16 GB, into `./models` like everything else):
+(about 16 GB):
 
 ```sh
 ./setup.sh --refine
+```
+
+The model goes in the shared Hugging Face cache, `~/.cache/huggingface/hub` (or `$HF_HUB_CACHE`,
+or `$HF_HOME/hub`), where mflux, diffusers and other projects look by default, so it is only
+downloaded once per machine and is reused if it's already there. To keep it somewhere else (e.g.
+an external drive shared by several projects), set `RORA_REFINE_CACHE` to that folder for both
+`setup.sh` and runs. To remove it: `rm -rf ~/.cache/huggingface/hub/models--black-forest-labs--FLUX.2-klein-4B`.
+
+Downloads use the operating system's certificate store, so they also work on networks that
+inspect HTTPS (e.g. Cisco Secure Access / Umbrella, Zscaler), where Python's own certificate
+list would fail with `CERTIFICATE_VERIFY_FAILED`. To fetch just the model without the rest of
+`setup.sh` (same files, same place):
+
+```sh
+HF_HUB_OFFLINE=0 env/bin/python -c 'from rora import refine; refine.download()'
 ```
 
 It runs with one of two backends (`--refine-backend`, default `auto`):

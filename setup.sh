@@ -35,7 +35,7 @@ depth.load_model("cpu")
 PY
 
 if [ "$REFINE" = 1 ]; then
-  echo "Downloading FLUX.2 [klein] 4B for --refine into ./models (about 16 GB, first time only)..."
+  echo "Downloading FLUX.2 [klein] 4B for --refine into the shared Hugging Face cache (about 16 GB, first time only)..."
   HF_HUB_OFFLINE=0 env/bin/python -W ignore -c 'from rora import refine; refine.download()'
 fi
 

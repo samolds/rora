@@ -17,7 +17,7 @@ import cv2
 import numpy as np
 from PIL import Image
 
-from . import env  # noqa: F401  (model downloads go to ./models/hf)
+from . import env
 from .segment import describe
 
 log = logging.getLogger(__name__)
@@ -60,7 +60,9 @@ SETUP_HELP = f"""\
 How to set up the refine pass (one time):
   1. Install the Python packages (mflux on Apple silicon, diffusers elsewhere):
        env/bin/pip install -r requirements.txt
-  2. Download {MODEL_NAME} (about {DOWNLOAD_GB} GB, into ./models; Apache-2.0 licence):
+  2. Download {MODEL_NAME} (about {DOWNLOAD_GB} GB, Apache-2.0 licence) into the shared
+     Hugging Face cache, {env.SHARED_HF_HUB} (other projects using mflux or
+     diffusers find it there too; set RORA_REFINE_CACHE to use another folder):
        ./setup.sh --refine
   Memory: about 8 GB extra with mflux at 8-bit (--refine-quantize 4 for about 4 GB);
   diffusers needs about 16 GB (CUDA VRAM, or unified memory on a Mac)."""
@@ -102,17 +104,16 @@ def is_apple_silicon() -> bool:
 
 
 def model_dir() -> Path:
-    from huggingface_hub import constants
-
     name = "models--" + MODEL_REPO.replace("/", "--")
-    return Path(constants.HF_HUB_CACHE) / name / "snapshots" / MODEL_REVISION
+    return env.SHARED_HF_HUB / name / "snapshots" / MODEL_REVISION
 
 
 def download():
-    """Fetch the model into the Hugging Face cache under ./models (used by setup.sh --refine)."""
+    """Fetch the model into the shared Hugging Face cache (used by setup.sh --refine)."""
     from huggingface_hub import snapshot_download
 
-    snapshot_download(MODEL_REPO, revision=MODEL_REVISION, allow_patterns=DOWNLOAD_PATTERNS)
+    snapshot_download(MODEL_REPO, revision=MODEL_REVISION, allow_patterns=DOWNLOAD_PATTERNS,
+                      cache_dir=env.SHARED_HF_HUB)
 
 
 def check_ready(backend: str) -> str:
@@ -142,7 +143,7 @@ def _load_editor(opts: Options, device: str):
         from mflux.models.common.config.model_config import ModelConfig
         from mflux.models.flux2.variants import Flux2KleinEdit
 
-        model = Flux2KleinEdit(quantize=opts.quantize or None,
+        model = Flux2KleinEdit(quantize=opts.quantize or None, model_path=str(model_dir()),
                                model_config=ModelConfig.flux2_klein_4b())
 
         def edit(canvas: np.ndarray, prompt: str, seed: int) -> np.ndarray:
@@ -158,8 +159,7 @@ def _load_editor(opts: Options, device: str):
         import torch
         from diffusers import Flux2KleinPipeline
 
-        pipe = Flux2KleinPipeline.from_pretrained(MODEL_REPO, revision=MODEL_REVISION,
-                                                  torch_dtype=torch.bfloat16)
+        pipe = Flux2KleinPipeline.from_pretrained(str(model_dir()), torch_dtype=torch.bfloat16)
         if device == "cuda":
             pipe.enable_model_cpu_offload()
         else:

@@ -9,6 +9,8 @@ Pillow>=10.0,<13
 controlnet-aux>=0.0.10
 scikit-image>=0.22
 transformers>=4.40
+# downloads verify HTTPS with the OS certificate store (see rora/env.py)
+truststore>=0.10
 # optional --refine pass (FLUX.2 [klein] 4B): mflux on Apple silicon, diffusers elsewhere
 mflux>=0.23; sys_platform == "darwin" and platform_machine == "arm64"
 diffusers>=0.41
