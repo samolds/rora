@@ -93,6 +93,9 @@ python lineart.py img/in/1.jpg -s fineline brush dotwork --preview
 # every photo in a folder, every tattoo style, plus SVG
 python lineart.py img/in -s tattoo --svg --preview
 
+# 5 photos picked at random from a folder (the seed is logged; --sample-seed repeats a pick)
+python lineart.py img/in --sample 5 -s fineline
+
 # fewer / more lines, cleaner / more literal lines
 python lineart.py img/in/1.jpg -s fineline --detail 0      # just outline + face
 python lineart.py img/in/1.jpg -s fineline --detail 0.6

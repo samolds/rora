@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import logging
+import random
 import sys
 import time
 from dataclasses import dataclass
@@ -109,6 +110,10 @@ def parse_args(argv=None):
     ap.add_argument("inputs", nargs="*", type=Path, default=[Path("img/in")],
                     help="image files or folders (default: img/in)")
     ap.add_argument("-o", "--out", type=Path, default=Path("img/out"))
+    ap.add_argument("--sample", type=positive_int, metavar="N",
+                    help="run only N images picked at random from the inputs (the seed is logged)")
+    ap.add_argument("--sample-seed", type=int, metavar="SEED",
+                    help="seed for --sample, to pick the same images again")
     ap.add_argument("--list-styles", action="store_true", help="show styles and their settings")
 
     g = ap.add_argument_group("style")
@@ -198,6 +203,26 @@ def parse_overrides(args) -> dict:
     if args.invert:
         out["invert"] = True
     return out
+
+
+def positive_int(text: str) -> int:
+    n = int(text)
+    if n < 1:
+        raise argparse.ArgumentTypeError("must be 1 or more")
+    return n
+
+
+def sample_images(files: list[Path], n: int, seed: int | None) -> list[Path]:
+    """N files picked at random (in their original order); all of them if there are only N."""
+    if seed is None:
+        seed = random.randrange(2**31)
+    if n >= len(files):
+        log.info("--sample %d: only %d image(s), using all of them", n, len(files))
+        return files
+    picked = set(random.Random(seed).sample(range(len(files)), n))
+    files = [f for i, f in enumerate(files) if i in picked]
+    log.info("--sample %d (--sample-seed %d): %s", n, seed, ", ".join(f.name for f in files))
+    return files
 
 
 def collect_images(inputs: list[Path]) -> list[Path]:
@@ -363,6 +388,8 @@ def main(argv=None) -> int:
     setup_logging(args.out)
     overrides = parse_overrides(args)
     files = collect_images(args.inputs)
+    if args.sample:
+        files = sample_images(files, args.sample, args.sample_seed)
     log.info("%d photo(s), style(s): %s, overrides: %s", len(files), names, overrides or "none")
     ids = {n: settings_id(n, overrides, args) for n in names}
     for n, (tag, text) in ids.items():
