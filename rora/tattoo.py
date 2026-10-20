@@ -284,7 +284,8 @@ def minimal(rgb, mask, p):
         q = resample(q, 2 * s)
         keep = np.ones(len(q), bool)
         gap = int(len(q) * p["gap_size"])
-        for start in rng.choice(len(q), int(p["gaps"]), replace=False):
+        # short outline pieces have fewer points than gaps; they get at most one gap per point
+        for start in rng.choice(len(q), min(int(p["gaps"]), len(q)), replace=False):
             keep[start:start + gap] = False
         # draw each kept run separately so gaps stay open
         idx = np.flatnonzero(np.diff(np.concatenate([[0], keep.astype(int), [0]])))

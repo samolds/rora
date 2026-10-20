@@ -44,6 +44,12 @@ env/bin/python lineart.py img/in/1.jpg --style tattoo --preview     # try the in
 Then add your own photos to `img/in/` and run `env/bin/python lineart.py --preview`.
 Results go to `img/out/`, including `_preview.png` (every result on a dark background) and `run.log`.
 
+After `setup.sh` (and `./setup.sh --refine` for `--refine`), runs work fully offline and make no
+network calls: once the weights are in `models/`, the Hugging Face libraries and Ultralytics are
+switched to offline mode (`HF_HUB_OFFLINE=1`, `YOLO_OFFLINE=1`, set in `rora/env.py`; Ultralytics'
+usage analytics are off too), and the refine model loads from its local snapshot. Checked by running
+every style, SVG, preview and `--refine` with the network blocked.
+
 Output files are named `<photo>__<style>_d<detail>_w<weight>[_<other settings>].png`, e.g.
 `1__edges_d0.4_w1.png`. With `--subject auto` or a kind, the subject is added after the photo
 name: `1_dog__edges_d0.4_w1.png`, or `1_dog1__...`, `1_dog2__...` when there are several.

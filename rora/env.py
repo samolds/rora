@@ -37,6 +37,12 @@ def _hf_cached(repo: str) -> bool:
 if all(_hf_cached(r) for r in HF_REPOS):
     os.environ.setdefault("HF_HUB_OFFLINE", "1")
 
+# ultralytics resolves one.one.one.one / dns.google on import to decide whether it's online (and
+# if so may check PyPI for updates); with its weights here it never needs the network.
+# setup.sh passes YOLO_OFFLINE=0 so it can still download them
+if all((MODELS / f).exists() for f in ("yolo11x.pt", "sam2.1_b.pt")):
+    os.environ.setdefault("YOLO_OFFLINE", "1")
+
 
 def disable_ultralytics_analytics():
     from ultralytics import settings

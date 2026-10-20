@@ -23,7 +23,7 @@ env/bin/pip install -r requirements.txt
 mkdir -p img/in img/out
 
 echo "Downloading model weights into ./models (about 1.2 GB, first time only)..."
-HF_HUB_OFFLINE=0 env/bin/python -W ignore - <<'PY'
+HF_HUB_OFFLINE=0 YOLO_OFFLINE=0 env/bin/python -W ignore - <<'PY'
 from rora import env  # keeps downloads inside ./models
 import logging
 logging.basicConfig(level=logging.INFO, format="  %(message)s")
@@ -37,7 +37,7 @@ depth.load_model("cpu")
 PY
 
 if [ -n "$REFINE" ]; then
-  HF_HUB_OFFLINE=0 env/bin/python -W ignore - "$REFINE" <<'PY'
+  HF_HUB_OFFLINE=0 YOLO_OFFLINE=0 env/bin/python -W ignore - "$REFINE" <<'PY'
 import sys
 from rora import refine
 key = refine.DEFAULT_MODEL if sys.argv[1] == "default" else sys.argv[1]
