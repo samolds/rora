@@ -21,6 +21,7 @@ lab/
 # Personal photos and generated output (1.jpg is kept as a demo; it has no GPS metadata)
 img/in/*
 !img/in/1.jpg
+img/peevin/
 img/example_out/
 img/out/
 img/out*/

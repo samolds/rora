@@ -3,7 +3,7 @@ to clean it up or restyle it, inside this process.
 
 Backends: mflux (MLX, Apple silicon) or Hugging Face diffusers (PyTorch; CUDA, or MPS/CPU).
 The drawing is sent as black ink on white, and the result is turned back into an ink mask
-clipped to the dog, so colour, transparency, cropping and SVG export work as for the original.
+clipped to the subject, so colour, transparency, cropping and SVG export work as for the original.
 """
 import importlib.util
 import logging
@@ -35,22 +35,23 @@ REQUIRED_FILES = ["model_index.json", "transformer/diffusion_pytorch_model.safet
 DOWNLOAD_GB = 16
 STEPS = 4  # klein 4B is step-distilled
 MODEL_SIZE = 1024  # long side sent to the model; it works around 1 MP
-SCORE_MARGIN = 0.1  # reject a result whose dog score drops by more than this
-DOG_QUERIES = {"dog": ["a drawing of a dog", "a line drawing of a dog"]}
+SCORE_MARGIN = 0.1  # reject a result whose subject score drops by more than this
+# interior lines the stylize prompt asks for, per subject
+FORM_LINES = {"dog": "ears, legs and fur direction", "cat": "ears, legs and fur direction",
+              "person": "hair, hands and clothing folds"}
 
 PROMPTS = {
     "clean": (
-        "Clean up this black ink drawing of a dog. Keep exactly the same dog, pose, proportions, "
-        "framing, drawing style and line thickness. Remove stray marks and tiny broken fragments, "
-        "join lines that are broken and smooth wobbly lines. Black ink on a plain white "
-        "background only: no shading, no fill, no colour, no text, no new details."
+        "Clean up this black ink drawing of a {kind}. Keep exactly the same {kind}, pose, "
+        "proportions, framing, drawing style and line thickness. Remove stray marks and tiny "
+        "broken fragments, join lines that are broken and smooth wobbly lines. Black ink on a "
+        "plain white background only: no shading, no fill, no colour, no text, no new details."
     ),
     "stylize": (
-        "Redraw this black ink drawing of a dog more clearly, in the same drawing style, pose, "
-        "proportions and framing. Make it unmistakably a dog: a confident continuous outline, "
-        "clearly drawn eyes, nose and mouth, and only a few interior lines for ears, legs and fur "
-        "direction. Black ink on a plain white background only: no shading, no fill, no colour, "
-        "no text."
+        "Redraw this black ink drawing of a {kind} more clearly, in the same drawing style, pose, "
+        "proportions and framing. Make it unmistakably a {kind}: a confident continuous outline, "
+        "clearly drawn eyes, nose and mouth, and only a few interior lines for {form}. Black ink "
+        "on a plain white background only: no shading, no fill, no colour, no text."
     ),
 }
 
@@ -78,7 +79,7 @@ class Options:
     backend: str = "mflux"  # resolved by check_ready()
     prompt: str = ""  # extra instruction appended to the built-in one
     seed: int = 1
-    threshold: float = 0.5  # auto: skip at or above this dog score; restyle below half of it
+    threshold: float = 0.5  # auto: skip at or above this subject score; restyle below half of it
     quantize: int = 8  # mflux only: 4 or 8 bit, 0 = full precision
 
 
@@ -121,7 +122,7 @@ def check_ready(backend: str) -> str:
         raise RefineError(_banner(
             "--refine-backend mflux needs a Mac with Apple silicon; use diffusers here."))
     if importlib.util.find_spec(backend) is None:
-        raise RefineError(_banner(f"--refine needs the '{backend}' package, which isn't installed."))
+        raise RefineError(_banner(f"--refine needs the '{backend}' package; it isn't installed."))
     missing = [f for f in REQUIRED_FILES if not (model_dir() / f).exists()]
     if missing:
         raise RefineError(_banner(
@@ -186,7 +187,7 @@ def _generate(canvas: np.ndarray, prompt: str, opts: Options, device: str) -> np
 
 @dataclass
 class _Frame:
-    """Where the dog's crop sits on the model canvas."""
+    """Where the subject's crop sits on the model canvas."""
     y0: int
     y1: int
     x0: int
@@ -210,7 +211,7 @@ def _frame(mask: np.ndarray, size: int) -> _Frame:
 
 
 def to_canvas(ink: np.ndarray, fr: _Frame) -> np.ndarray:
-    """Black ink on white, cropped to the dog and scaled onto a model-sized RGB canvas."""
+    """Black ink on white, cropped to the subject and scaled onto a model-sized RGB canvas."""
     crop = ink[fr.y0:fr.y1, fr.x0:fr.x1].astype(np.float32)
     small = cv2.resize(crop, (fr.w, fr.h), interpolation=cv2.INTER_AREA)
     ch, cw = -(-fr.h // 64) * 64, -(-fr.w // 64) * 64
@@ -231,26 +232,30 @@ def from_canvas(rgb: np.ndarray, fr: _Frame, shape: tuple[int, int], keep: np.nd
     return out & keep
 
 
-def dog_score(finder, canvas: np.ndarray) -> float:
-    """How much OWLv2 thinks the drawing shows a dog (0 if below its detection floor)."""
+def subject_score(finder, canvas: np.ndarray, kind: str) -> float:
+    """How much OWLv2 thinks the drawing shows a `kind` (0 if below its detection floor)."""
+    queries = {kind: [f"a drawing of a {kind}", f"a line drawing of a {kind}"]}
     # OWLv2 barely reacts to crisp thin lines; a slight blur makes scores stable across line weights
-    dets = finder.detect(cv2.GaussianBlur(canvas, (0, 0), 2), DOG_QUERIES)
+    dets = finder.detect(cv2.GaussianBlur(canvas, (0, 0), 2), queries)
     return max((d.score for d in dets), default=0.0)
 
 
-def refine(ink: np.ndarray, mask: np.ndarray, mode: str, finder, opts: Options,
+def refine(ink: np.ndarray, mask: np.ndarray, kind: str, mode: str, finder, opts: Options,
            device: str) -> Result:
-    """Run one drawing through the editing model. `mode` is auto, clean or stylize."""
+    """Run one drawing of a `kind` (dog, cat, person) through the editing model.
+    `mode` is auto, clean or stylize."""
     t = time.perf_counter()
     fr = _frame(mask, MODEL_SIZE)
     sent = to_canvas(ink, fr)
-    before = dog_score(finder, sent)
+    before = subject_score(finder, sent, kind)
     if mode == "auto":
         if before >= opts.threshold:
             return Result("skip", before, seconds=time.perf_counter() - t)
         mode = "clean" if before >= opts.threshold / 2 else "stylize"
 
-    prompt = PROMPTS[mode] + (" " + opts.prompt.strip() if opts.prompt.strip() else "")
+    prompt = PROMPTS[mode].format(kind=kind, form=FORM_LINES[kind])
+    if opts.prompt.strip():
+        prompt += " " + opts.prompt.strip()
     raw = _generate(sent, prompt, opts, device)
 
     size = max(fr.y1 - fr.y0, fr.x1 - fr.x0)
@@ -258,10 +263,11 @@ def refine(ink: np.ndarray, mask: np.ndarray, mode: str, finder, opts: Options,
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1))
     keep = cv2.dilate((mask | ink).astype(np.uint8), kernel) > 0
     new = from_canvas(raw, fr, mask.shape, keep)
-    after = dog_score(finder, to_canvas(new, fr))
+    after = subject_score(finder, to_canvas(new, fr), kind)
 
     res = Result(mode, before, after, new, sent=sent, raw=raw,
                  settings={"refine": mode, "refine_prompt": opts.prompt, "refine_seed": opts.seed,
+                           "refine_subject": kind,
                            "refine_model": MODEL_REPO, "refine_backend": opts.backend,
                            "refine_quantize": opts.quantize if opts.backend == "mflux" else None,
                            "refine_score_before": round(before, 3),
@@ -269,6 +275,6 @@ def refine(ink: np.ndarray, mask: np.ndarray, mode: str, finder, opts: Options,
     if new.sum() < 0.001 * mask.sum():
         res.ink, res.rejected = None, "the result is (almost) empty"
     elif after < before - SCORE_MARGIN:
-        res.ink, res.rejected = None, f"it looks less like a dog ({before:.2f} -> {after:.2f})"
+        res.ink, res.rejected = None, f"it looks less like a {kind} ({before:.2f} -> {after:.2f})"
     res.seconds = time.perf_counter() - t
     return res

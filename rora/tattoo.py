@@ -65,7 +65,7 @@ def get_strokes(rgb, mask, p):
     face = None
     if p["features"]:
         if "face" not in _cache:
-            _cache["face"] = get_finder(device).find_features(rgb, mask)
+            _cache["face"] = get_finder(device).find_features(rgb, mask, p.get("subject", "dog"))
             if _cache["face"] is not None:
                 _cache["head_maps"] = features.head_maps(rgb, mask, _cache["face"], device)
         face = _cache["face"]

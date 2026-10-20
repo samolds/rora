@@ -25,9 +25,9 @@ HF_HUB_OFFLINE=0 env/bin/python -W ignore - <<'PY'
 from rora import env  # keeps downloads inside ./models
 import logging
 logging.basicConfig(level=logging.INFO, format="  %(message)s")
-from rora.segment import DogSegmenter
+from rora.segment import Segmenter
 from rora import depth, edgemaps, features
-DogSegmenter(device="cpu")
+Segmenter(device="cpu")
 for name in edgemaps.ML_MODELS:
     edgemaps.load_model(name, "cpu")
 features.FeatureFinder("cpu")

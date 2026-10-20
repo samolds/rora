@@ -1,4 +1,4 @@
-"""Find dogs in a photo and cut each one out as a clean binary mask."""
+"""Find the main subject of a photo (a person, cat or dog) and cut it out as a clean binary mask."""
 import logging
 import time
 from dataclasses import dataclass
@@ -12,16 +12,16 @@ from . import env
 
 log = logging.getLogger(__name__)
 
-COCO_CAT, COCO_DOG = 15, 16
-# lying or curled-up dogs are often labelled "cat"; these photos are assumed to be of dogs
-ANIMAL_CLASSES = [COCO_CAT, COCO_DOG]
+COCO_KINDS = {0: "person", 15: "cat", 16: "dog"}
+SUBJECTS = ("auto", *COCO_KINDS.values())
 
 
 @dataclass
-class Dog:
+class Subject:
     mask: np.ndarray  # bool HxW
     box: tuple[int, int, int, int]
     score: float
+    kind: str  # "person", "cat" or "dog"
 
 
 def pick_device(requested: str = "auto") -> str:
@@ -64,7 +64,17 @@ def clean_mask(mask: np.ndarray, smooth: int = 5) -> np.ndarray:
     return filled.astype(bool)
 
 
-class DogSegmenter:
+def prominence(box, score: float, shape) -> float:
+    """How much a detection looks like the photo's main subject: big, central and confident."""
+    h, w = shape[:2]
+    x0, y0, x1, y1 = box
+    area = (x1 - x0) * (y1 - y0) / (w * h)
+    cx, cy = (x0 + x1) / (2 * w) - 0.5, (y0 + y1) / (2 * h) - 0.5
+    off_centre = np.hypot(cx, cy) / np.hypot(0.5, 0.5)  # 0 at the centre, 1 in a corner
+    return score * area * (1 - 0.5 * off_centre)
+
+
+class Segmenter:
     def __init__(self, device: str = "auto", detector: str = "yolo11x.pt",
                  segmenter: str = "sam2.1_b.pt", min_conf: float = 0.35):
         from ultralytics import SAM, YOLO
@@ -80,25 +90,27 @@ class DogSegmenter:
         self.segmenter = SAM(segmenter)
         log.info("Models loaded in %.1fs", time.perf_counter() - t)
 
-    def find_dogs(self, rgb: np.ndarray) -> list[Dog]:
+    def find_subject(self, rgb: np.ndarray, subject: str = "auto") -> Subject | None:
+        """The main subject (or the main one of kind `subject`), or None if there is none."""
         bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+        classes = [c for c, k in COCO_KINDS.items() if subject in ("auto", k)]
 
         t = time.perf_counter()
-        det = self.detector(bgr, classes=ANIMAL_CLASSES, conf=self.min_conf, agnostic_nms=True,
+        det = self.detector(bgr, classes=classes, conf=self.min_conf, agnostic_nms=True,
                             device=self.device, verbose=False)[0]
         boxes = det.boxes.xyxy.cpu().numpy().astype(int).tolist()
         scores = det.boxes.conf.cpu().numpy().tolist()
-        labels = [det.names[int(c)] for c in det.boxes.cls.cpu().numpy()]
-        log.info("  detect: %d dog(s) %s in %.1fs", len(boxes),
-                 [f"{s:.2f}" + (" (as cat)" if lab == "cat" else "") for s, lab in zip(scores, labels)],
-                 time.perf_counter() - t)
+        kinds = [COCO_KINDS[int(c)] for c in det.boxes.cls.cpu().numpy()]
+        log.info("  detect: %s in %.1fs", ", ".join(f"{k} {s:.2f}" for k, s in zip(kinds, scores))
+                 or "nothing", time.perf_counter() - t)
         if not boxes:
-            return []
+            return None
+        i = max(range(len(boxes)), key=lambda j: prominence(boxes[j], scores[j], rgb.shape))
+        if len(boxes) > 1:
+            log.info("  main subject: %s %.2f", kinds[i], scores[i])
 
         t = time.perf_counter()
-        seg = self.segmenter(bgr, bboxes=boxes, device=self.device, verbose=False)[0]
-        masks = seg.masks.data.cpu().numpy() > 0.5
-        log.info("  segment: %d mask(s) in %.1fs", len(masks), time.perf_counter() - t)
-
-        dogs = [Dog(clean_mask(m), tuple(b), s) for m, b, s in zip(masks, boxes, scores)]
-        return sorted(dogs, key=lambda d: d.score, reverse=True)
+        seg = self.segmenter(bgr, bboxes=[boxes[i]], device=self.device, verbose=False)[0]
+        mask = clean_mask(seg.masks.data[0].cpu().numpy() > 0.5)
+        log.info("  segment: %.1fs", time.perf_counter() - t)
+        return Subject(mask, tuple(boxes[i]), scores[i], kinds[i])

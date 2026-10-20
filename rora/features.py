@@ -1,4 +1,4 @@
-"""Find the dog's head and its features (eyes, nose, mouth) with OWLv2, zooming into the head."""
+"""Find the subject's head and its features (eyes, nose, mouth) with OWLv2, zooming in."""
 import logging
 import time
 from dataclasses import dataclass, field
@@ -12,11 +12,29 @@ from . import cleanup, edgemaps, env, strokes
 log = logging.getLogger(__name__)
 
 OWL_MODEL = "google/owlv2-base-patch16-ensemble"
-HEAD_QUERIES = ["a dog's head", "a dog's face"]
+HEAD_QUERIES = {
+    "dog": ["a dog's head", "a dog's face"],
+    # YOLO also labels curled-up dogs "cat", so cats get species-neutral wording too
+    "cat": ["a cat's face", "an animal's face", "an animal's head"],
+    # OWLv2 scores "a person's face" far lower than these on real photos
+    "person": ["a face", "a human head"],
+}
 FEATURE_QUERIES = {
-    "eye": ["a dog's eye", "an eye"],
-    "nose": ["a dog's nose", "a black nose"],
-    "mouth": ["a dog's mouth", "an open mouth with tongue"],
+    "dog": {
+        "eye": ["a dog's eye", "an eye"],
+        "nose": ["a dog's nose", "a black nose"],
+        "mouth": ["a dog's mouth", "an open mouth with tongue"],
+    },
+    "cat": {
+        "eye": ["a cat's eye", "an eye"],
+        "nose": ["a cat's nose", "an animal's nose"],
+        "mouth": ["a cat's mouth", "an animal's mouth"],
+    },
+    "person": {
+        "eye": ["an eye", "a human eye"],
+        "nose": ["a nose", "a human nose"],
+        "mouth": ["a mouth", "lips"],
+    },
 }
 
 
@@ -112,21 +130,22 @@ class FeatureFinder:
                 dets.append(Feature(labels[int(li)][0], (x0, y0, x1, y1), float(score)))
         return dets
 
-    def find_head(self, rgb: np.ndarray, mask: np.ndarray) -> Feature | None:
+    def find_head(self, rgb: np.ndarray, mask: np.ndarray, kind: str = "dog") -> Feature | None:
         ys, xs = np.nonzero(mask)
         x0, y0, x1, y1 = xs.min(), ys.min(), xs.max() + 1, ys.max() + 1
         crop = rgb[y0:y1, x0:x1].copy()
         crop[~mask[y0:y1, x0:x1]] = 255
-        dets = self.detect(crop, {"head": HEAD_QUERIES})
+        dets = self.detect(crop, {"head": HEAD_QUERIES[kind]})
         if not dets:
             return None
         best = nms(dets)[0]
         b = best.box
         return Feature("head", (b[0] + x0, b[1] + y0, b[2] + x0, b[3] + y0), best.score)
 
-    def find(self, rgb: np.ndarray, mask: np.ndarray, pad: float = 0.15) -> Face | None:
+    def find(self, rgb: np.ndarray, mask: np.ndarray, kind: str = "dog",
+             pad: float = 0.15) -> Face | None:
         t = time.perf_counter()
-        head = self.find_head(rgb, mask)
+        head = self.find_head(rgb, mask, kind)
         if head is None:
             log.info("  features: no head found")
             return None
@@ -135,7 +154,7 @@ class FeatureFinder:
         px, py = (bx1 - bx0) * pad, (by1 - by0) * pad
         x0, y0 = int(max(0, bx0 - px)), int(max(0, by0 - py))
         x1, y1 = int(min(w, bx1 + px)), int(min(h, by1 + py))
-        dets = self.detect(rgb[y0:y1, x0:x1], FEATURE_QUERIES)
+        dets = self.detect(rgb[y0:y1, x0:x1], FEATURE_QUERIES[kind])
         for d in dets:
             d.box = (d.box[0] + x0, d.box[1] + y0, d.box[2] + x0, d.box[3] + y0)
         face = Face(head=head, candidates=dets)
@@ -143,9 +162,9 @@ class FeatureFinder:
                  time.perf_counter() - t)
         return face
 
-    def find_features(self, rgb: np.ndarray, mask: np.ndarray) -> Face | None:
+    def find_features(self, rgb: np.ndarray, mask: np.ndarray, kind: str = "dog") -> Face | None:
         """Head + the most plausible eyes/nose/mouth, each with a SAM 2 shape mask."""
-        face = self.find(rgb, mask)
+        face = self.find(rgb, mask, kind)
         if face is None:
             return None
         select(face)
@@ -161,7 +180,7 @@ def inside(p: np.ndarray, box) -> bool:
 
 def select(face: Face, min_eye: float = 0.2, min_nose: float = 0.2, min_mouth: float = 0.15):
     """Pick a plausible nose, up to two eyes, and a mouth from the raw candidates."""
-    by = {n: nms([c for c in face.candidates if c.name == n]) for n in FEATURE_QUERIES}
+    by = {n: nms([c for c in face.candidates if c.name == n]) for n in ("eye", "nose", "mouth")}
 
     noses = [n for n in by["nose"] if n.score >= min_nose]
     face.nose = noses[0] if noses else None

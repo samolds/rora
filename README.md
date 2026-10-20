@@ -1,9 +1,10 @@
 # rora
 
-Turn photos of a dog into print-ready line art: a transparent PNG (and optional SVG)
-of just the dog, drawn in white lines for printing on dark shirts.
+Turn photos of a dog, cat or person into print-ready line art: a transparent PNG (and optional
+SVG) of just that subject, drawn in white lines for printing on dark shirts.
 
-The pipeline finds the dog (ignoring people and background), cuts it out, and draws it
+The pipeline finds the main subject of each photo (the biggest, most central person, cat or
+dog; everything else, including other people and pets, is left out), cuts it out, and draws it
 in one of several styles, including minimalist tattoo-style line art.
 
 ## Sam's Favorite run config
@@ -51,11 +52,11 @@ The full settings are also embedded in each PNG (text field `dog_lineart_setting
 | `cl` | cell | `sm` | smooth | `mc` | --min-conf |
 | `a` | angle | `eb` | edge_band | `det` | --detector |
 | `sp` | spacing | `f` | freedom | `seg` | --segmenter |
-| `dt` | dot | `ft` | features | `rf` | --refine (refined files only) |
-| `sd` | seed | `ae` | almond_eyes | `rsd` | --refine-seed |
-| `xh` | crosshatch | `pu` | pupils | `rq` | --refine-quantize |
-| `lv` | levels | `ns` | nose_solid | `rp` | --refine-prompt (short hash) |
-| `lt` | light | `mb` | max_blobs | | |
+| `dt` | dot | `ft` | features | `sub` | --subject |
+| `sd` | seed | `ae` | almond_eyes | `rf` | --refine (refined files only) |
+| `xh` | crosshatch | `pu` | pupils | `rsd` | --refine-seed |
+| `lv` | levels | `ns` | nose_solid | `rq` | --refine-quantize |
+| `lt` | light | `mb` | max_blobs | `rp` | --refine-prompt (short hash) |
 | `rm` | rim | `dk` | darkness | | |
 | `la` | light_angle | `or` | outline_ratio | | |
 | `gr` | grain | `tp` | taper | | |
@@ -101,7 +102,8 @@ python dog_lineart.py --list-styles
 
 Useful options: `--detail 0..1` (how much is drawn), `--weight N` (line width),
 `--set key=value` (any style setting), `--size` / `--dpi` (print size, default
-3600 px at 300 DPI = 12"), `--svg`, `--no-preview`, `--debug` (saves the dog cut-out).
+3600 px at 300 DPI = 12"), `--svg`, `--no-preview`, `--debug` (saves the subject's cut-out),
+`--subject dog|cat|person` (only consider that kind; default `auto` picks the main subject).
 Run `python dog_lineart.py --help` for the full list.
 
 With no options, `python dog_lineart.py` runs every photo in `img/in/` with:
@@ -144,19 +146,19 @@ Each takes roughly 20–25 minutes for about 50 photos on an Apple M-series Mac.
 
 `--refine` adds a final pass that runs each finished drawing through the
 [FLUX.2 [klein] 4B](https://huggingface.co/black-forest-labs/FLUX.2-klein-4B) image-editing model
-(Apache-2.0), inside this script, to clean it up or restyle it so it clearly reads as a dog. The
-original is always written; the refined version is written next to it with `_rf-<mode>` added
-to the name (e.g. `1__edges_d0.5_w2_rf-clean.png`).
+(Apache-2.0), inside this script, to clean it up or restyle it so it clearly reads as its subject
+(dog, cat or person). The original is always written; the refined version is written next to it
+with `_rf-<mode>` added to the name (e.g. `1__edges_d0.5_w2_rf-clean.png`).
 
 | Mode | What it does |
 |---|---|
 | `clean` | light touch-up: removes stray marks, joins broken lines, keeps everything else |
 | `stylize` | redraws more clearly in the same style and pose (clear outline, eyes, nose, mouth) |
-| `auto` | scores each drawing for "looks like a dog" (OWLv2); skips good ones, cleans middling ones, stylizes poor ones |
+| `auto` | scores each drawing for "looks like a dog / cat / person" (OWLv2); skips good ones, cleans middling ones, stylizes poor ones |
 
-A refined result is thrown away (and logged) if it looks *less* like a dog than the original.
-The dog scores (0–1) are in `run.log`; tune `auto` with `--refine-threshold` (default 0.5). The result
-is clipped to the dog's outline, so the model can't add background.
+A refined result is thrown away (and logged) if it looks *less* like its subject than the
+original. The scores (0–1) are in `run.log`; tune `auto` with `--refine-threshold` (default 0.5).
+The result is clipped to the subject's outline, so the model can't add background.
 
 ### Setup (one time)
 
@@ -203,10 +205,12 @@ features (eyes, nose, mouth, ears, feet) with no shading.
 
 ## How the tattoo styles work
 
-1. **Find the dog**: YOLO detects each dog, SAM 2 cuts it out (one output file per dog).
+1. **Find the subject**: YOLO detects people, cats and dogs; the biggest, most central one is
+   the subject (one output file per photo, per style) and SAM 2 cuts it out.
+   YOLO sometimes labels a curled-up dog as a cat; `--subject dog` avoids that.
 2. **Find the face**: OWLv2 finds the head, then the eyes, nose and mouth in a zoomed-in
-   crop; SAM 2 traces each one's exact shape.
-3. **Pass 1, many drawings**: the dog (and, separately, the zoomed-in head) is drawn 7
+   crop (with wording for the subject's kind); SAM 2 traces each one's exact shape.
+3. **Pass 1, many drawings**: the subject (and, separately, the zoomed-in head) is drawn 7
    different ways (classic edge filters plus pretrained line-art models). They disagree
    about fur but agree about real features.
 4. **Pass 2, vote**: only lines most drawings agree on are kept, traced into strokes,
@@ -219,7 +223,7 @@ features (eyes, nose, mouth, ears, feet) with no shading.
    `--set almond_eyes=1` uses a stylised almond eye shape; `--set pupils=1` adds pupils.
 
 Form lines for volume come from a depth model (Depth Anything V2): where one part of the
-dog sits in front of another (a leg over the chest, an ear over the head) an overlap line
+subject sits in front of another (a leg over the chest, an ear over the head) an overlap line
 is drawn, like an artist would.
 
 The outline and face are always drawn. `--detail` only controls the extra lines:
@@ -239,13 +243,13 @@ px are for the 2500 px working image and scale automatically with it.
 |---|---|---|---|
 | `detail` | 0.5 | 0 – 1 | how much is drawn: 0 = simplest, 1 = busiest |
 | `weight` | varies | 1 – 20 px | line thickness |
-| `invert` | off | flag `--invert` | tonal styles only (stencil, halftone, stipple, engraving, cartoon, comic, woodcut, noir): put ink where the dog is dark instead of light |
+| `invert` | off | flag `--invert` | tonal styles only (stencil, halftone, stipple, engraving, cartoon, comic, woodcut, noir): put ink where the subject is dark instead of light |
 
 ### Line and texture styles
 
 | Style | Setting | Default | Range | Effect |
 |---|---|---|---|---|
-| `stencil` | `threshold` | 0.5 | 0 – 1 | lower = more of the dog is inked |
+| `stencil` | `threshold` | 0.5 | 0 – 1 | lower = more of the subject is inked |
 | | `contrast` | 3.0 | 0 – 6 | local contrast boost before thresholding (0 = off) |
 | | `weight` | 2 | | not used |
 | `ink` | `epsilon` | 0.02 | 0 – 0.1 | lower = more, fainter lines |
@@ -345,7 +349,7 @@ Specific to each look:
 |---|---|
 | `dog_lineart.py` | command-line entry point |
 | `rora/` | pipeline package (modules below) |
-| `rora/segment.py` | dog detection and cut-out |
+| `rora/segment.py` | finds the main subject (person, cat or dog) and cuts it out |
 | `rora/features.py`, `rora/facedraw.py` | find and draw eyes, nose, mouth |
 | `rora/depth.py` | depth estimate and form lines (volume) |
 | `rora/edgemaps.py`, `rora/strokes.py`, `rora/cleanup.py` | tattoo passes 1, 2 and 3 |
