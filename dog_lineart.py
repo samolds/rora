@@ -6,6 +6,7 @@ import json
 import logging
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 from rora import env  # noqa: F401  (must come before torch/ultralytics imports)
@@ -13,7 +14,8 @@ import cv2
 import numpy as np
 
 from rora import export, refine, styles, tattoo
-from rora.segment import COCO_KINDS, SUBJECTS, Segmenter, describe, load_image
+from rora.segment import (COCO_KINDS, SUBJECTS, Segmenter, describe, free_device_memory,
+                          load_image)
 
 log = logging.getLogger("dog_lineart")
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".heic", ".webp", ".tif", ".tiff"}
@@ -159,8 +161,9 @@ def parse_args(argv=None):
                         "(default: off). Writes the refined file next to the original")
     g.add_argument("--refine-backend", choices=refine.BACKENDS, default="auto",
                    help="auto = mflux on Apple silicon, diffusers elsewhere")
-    g.add_argument("--refine-quantize", type=int, choices=(0, 4, 8), default=8,
-                   help="mflux weight precision in bits; 4 uses less memory, 0 = full (default: 8)")
+    g.add_argument("--refine-quantize", type=int, choices=(0, 4, 8), default=4,
+                   help="mflux weight precision in bits: 8 needs ~1.5 GB more memory, "
+                        "0 = full precision needs far more (default: 4)")
     g.add_argument("--refine-prompt", default="",
                    help="extra instruction added to the built-in one, e.g. 'thicker outline'")
     g.add_argument("--refine-seed", type=int, default=1)
@@ -238,9 +241,10 @@ def subject_groups(subjects: list, mode: str) -> list[tuple[str, list]]:
     return [(f"_{s.kind}{i}", [s]) for i, s in enumerate(subjects, 1)]
 
 
-def draw_subjects(args, photo: str, rgb, subjects, names, ids, overrides, refine_opts, device,
+def draw_subjects(args, photo: str, rgb, subjects, names, ids, overrides, refine_jobs,
                   previews: list) -> int:
-    """Draw the subjects together in every style (plus refined versions); returns files written."""
+    """Draw the subjects together in every style; returns files written. With --refine, also
+    queues each drawing in `refine_jobs` for the refine phase."""
     mask = np.logical_or.reduce([s.mask for s in subjects])
     kinds, written = [s.kind for s in subjects], 0
     if args.debug:
@@ -278,12 +282,35 @@ def draw_subjects(args, photo: str, rgb, subjects, names, ids, overrides, refine
                  time.perf_counter() - t)
         previews.append((stem, img))
         written += 1
+        if refine_jobs is not None:
+            refine_jobs.append(RefineJob(stem, settings, kinds, mask.shape, np.packbits(ink),
+                                         np.packbits(mask)))
+    return written
 
-        if not refine_opts:
-            continue
+
+@dataclass
+class RefineJob:
+    """A finished drawing waiting for the refine phase (ink and mask bit-packed to save memory)."""
+    stem: str
+    settings: str
+    kinds: list
+    shape: tuple
+    ink: np.ndarray
+    mask: np.ndarray
+
+    def unpack(self, packed: np.ndarray) -> np.ndarray:
+        return np.unpackbits(packed, count=self.shape[0] * self.shape[1]).reshape(self.shape) > 0
+
+
+def refine_all(args, jobs: list, refine_opts, device: str, previews: list) -> int:
+    """Phase 2: run every queued drawing through the editing model; returns files written."""
+    written = 0
+    finder = tattoo.get_finder("cpu")  # see tattoo.release_models()
+    for i, job in enumerate(jobs, 1):
+        log.info("[refine %d/%d] %s", i, len(jobs), job.stem)
+        ink, mask = job.unpack(job.ink), job.unpack(job.mask)
         try:
-            r = refine.refine(ink, mask, kinds, args.refine, tattoo.get_finder(device),
-                              refine_opts, device)
+            r = refine.refine(ink, mask, job.kinds, args.refine, finder, refine_opts, device)
         except refine.RefineError as e:
             log.error("  refine failed, keeping only the original: %s", e)
             continue
@@ -291,7 +318,7 @@ def draw_subjects(args, photo: str, rgb, subjects, names, ids, overrides, refine
             log.info("  refine: score %.2f >= %.2f, skipped", r.score_before,
                      args.refine_threshold)
             continue
-        rstem = f"{stem}_{refine_tag(r.mode, args)}"
+        rstem = f"{job.stem}_{refine_tag(r.mode, args)}"
         if args.debug:
             cv2.imwrite(str(args.out / f"{rstem}_debug_sent.png"), r.sent)
             cv2.imwrite(str(args.out / f"{rstem}_debug_raw.png"),
@@ -302,7 +329,7 @@ def draw_subjects(args, photo: str, rgb, subjects, names, ids, overrides, refine
             continue
         rout = export.despeckle(r.ink, args.min_speck)
         rout = export.crop_and_resize(rout, mask, args.pad, args.size)
-        rsettings = json.dumps({**json.loads(settings), **r.settings}, sort_keys=True)
+        rsettings = json.dumps({**json.loads(job.settings), **r.settings}, sort_keys=True)
         rimg, rmsg = save_outputs(args, rout, rstem, rsettings)
         log.info("  refine (%s): %s, score %.2f -> %.2f (%.1fs)", r.mode, rmsg,
                  r.score_before, r.score_after, r.seconds)
@@ -349,7 +376,9 @@ def main(argv=None) -> int:
         log.info("Refine: %s with %s via %s", args.refine, refine.MODEL_NAME, backend)
 
     seg = Segmenter(args.device, args.detector, args.segmenter, args.min_conf)
+    device = seg.device
     previews, written, skipped = [], 0, []
+    refine_jobs = [] if refine_opts else None
     start = time.perf_counter()
 
     for i, path in enumerate(files, 1):
@@ -367,10 +396,20 @@ def main(argv=None) -> int:
                 log.info("  drawing %s%s", describe([s.kind for s in group]),
                          f" -> {path.stem}{sub_tag}" if sub_tag else "")
                 written += draw_subjects(args, path.stem + sub_tag, rgb, group, names, ids,
-                                         overrides, refine_opts, seg.device, previews)
+                                         overrides, refine_jobs, previews)
         except Exception as e:  # keep the batch going; one bad photo shouldn't stop the run
             log.exception("  failed: %s", e)
             skipped.append(path.name)
+        free_device_memory()  # otherwise torch's MPS cache grows with every photo (~1-2 GB each)
+
+    if refine_jobs:
+        # the image-editing model needs the memory the drawing models were holding
+        log.info("Refine phase: freeing the drawing models, then %d drawing(s) through %s",
+                 len(refine_jobs), refine.MODEL_NAME)
+        del seg
+        tattoo.release_models()
+        free_device_memory()
+        written += refine_all(args, refine_jobs, refine_opts, device, previews)
 
     if args.preview:
         export.save_preview(previews, args.out / "_preview.png", args.color)

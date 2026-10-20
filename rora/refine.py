@@ -36,6 +36,7 @@ REQUIRED_FILES = ["model_index.json", "transformer/diffusion_pytorch_model.safet
 DOWNLOAD_GB = 16
 STEPS = 4  # klein 4B is step-distilled
 MODEL_SIZE = 1024  # long side sent to the model; it works around 1 MP
+MLX_CACHE_BYTES = 1 << 30  # mflux: cap on MLX's pool of freed buffers
 SCORE_MARGIN = 0.1  # reject a result whose subject score drops by more than this
 # interior lines the stylize prompt asks for, per subject
 FORM_LINES = {"dog": "ears, legs and fur direction", "cat": "ears, legs and fur direction",
@@ -64,8 +65,8 @@ How to set up the refine pass (one time):
      Hugging Face cache, {env.SHARED_HF_HUB} (other projects using mflux or
      diffusers find it there too; set RORA_REFINE_CACHE to use another folder):
        ./setup.sh --refine
-  Memory: about 8 GB extra with mflux at 8-bit (--refine-quantize 4 for about 4 GB);
-  diffusers needs about 16 GB (CUDA VRAM, or unified memory on a Mac)."""
+  Memory: mflux at the default 4-bit peaks around 6 GB during the refine phase (8-bit around
+  7.5 GB); diffusers needs about 16 GB (CUDA VRAM, or unified memory on a Mac)."""
 
 
 class RefineError(RuntimeError):
@@ -83,7 +84,7 @@ class Options:
     prompt: str = ""  # extra instruction appended to the built-in one
     seed: int = 1
     threshold: float = 0.5  # auto: skip at or above this subject score; restyle below half of it
-    quantize: int = 8  # mflux only: 4 or 8 bit, 0 = full precision
+    quantize: int = 4  # mflux only: 4 or 8 bit, 0 = full precision
 
 
 @dataclass
@@ -136,15 +137,60 @@ def check_ready(backend: str) -> str:
 _editor = None
 
 
+def _free_text_encoder_after_use(model, quantize: int | None):
+    """mflux: hold the text encoder (~2 GB at 4-bit) only while it encodes the prompt, so it
+    isn't resident while the drawing is encoded, denoised and decoded. It is reloaded from
+    disk (a few seconds) for the next drawing. Uses mflux 0.23 internals."""
+    import gc
+
+    import mlx.core as mx
+    from mflux.models.common.weights.loading.weight_applier import WeightApplier
+    from mflux.models.common.weights.loading.weight_loader import WeightLoader
+    from mflux.models.flux2.model.flux2_text_encoder.qwen3_text_encoder import Qwen3TextEncoder
+    from mflux.models.flux2.weights.flux2_weight_definition import Flux2KleinWeightDefinition
+
+    encode = model._encode_prompt_pair
+
+    def load():
+        component = next(c for c in Flux2KleinWeightDefinition.get_components()
+                         if c.name == "text_encoder")
+        weights = WeightLoader.load_single_local(component, model_dir())
+        model.text_encoder = Qwen3TextEncoder(**model.model_config.text_encoder_overrides)
+        WeightApplier.apply_and_quantize(weights, {"text_encoder": model.text_encoder}, quantize,
+                                         Flux2KleinWeightDefinition)
+
+    def encode_then_free(**kwargs):
+        if model.text_encoder is None:
+            load()
+        out = encode(**kwargs)
+        mx.eval([x for x in out if isinstance(x, mx.array)])
+        model.text_encoder = None
+        gc.collect()
+        mx.clear_cache()
+        return out
+
+    model._encode_prompt_pair = encode_then_free
+
+
 def _load_editor(opts: Options, device: str):
     """Load the model once; returns edit(canvas, prompt, seed) -> RGB array."""
     t = time.perf_counter()
     if opts.backend == "mflux":
+        import mlx.core as mx
         from mflux.models.common.config.model_config import ModelConfig
+        from mflux.models.common.vae.tiling_config import TilingConfig
         from mflux.models.flux2.variants import Flux2KleinEdit
 
+        # MLX keeps freed buffers for reuse with no cap by default; loading and quantizing the
+        # bf16 weights alone leaves ~8 GB there, which pushes a 16 GB Mac into swap
+        mx.set_cache_limit(MLX_CACHE_BYTES)
         model = Flux2KleinEdit(quantize=opts.quantize or None, model_path=str(model_dir()),
                                model_config=ModelConfig.flux2_klein_4b())
+        # encoding/decoding the whole image at once needs up to ~5/~9 GB extra at 1 MP. Tiled
+        # decoding leaves the ink unchanged; tiled encoding redraws small details (ink IoU ~0.9
+        # against untiled) at the same quality, with no visible seams on line art.
+        model.tiling_config = TilingConfig()
+        _free_text_encoder_after_use(model, opts.quantize or None)
 
         def edit(canvas: np.ndarray, prompt: str, seed: int) -> np.ndarray:
             h, w = canvas.shape[:2]

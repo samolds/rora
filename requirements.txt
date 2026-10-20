@@ -8,9 +8,12 @@ numpy>=1.26
 Pillow>=10.0,<13
 controlnet-aux>=0.0.10
 scikit-image>=0.22
+scipy>=1.11
 transformers>=4.40
+# mflux and diffusers need huggingface_hub 1.x
+huggingface_hub>=1.0,<2
 # downloads verify HTTPS with the OS certificate store (see rora/env.py)
 truststore>=0.10
 # optional --refine pass (FLUX.2 [klein] 4B): mflux on Apple silicon, diffusers elsewhere
-mflux>=0.23; sys_platform == "darwin" and platform_machine == "arm64"
+mflux>=0.23,<0.24; sys_platform == "darwin" and platform_machine == "arm64"
 diffusers>=0.41

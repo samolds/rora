@@ -39,6 +39,19 @@ def get_finder(device: str):
     return _finder
 
 
+def release_models():
+    """Drop the drawing models and cached passes. OWLv2, which --refine scores with, is kept but
+    moved to the CPU: any tensor left on the GPU stops torch from returning its MPS heaps
+    (~4 GB after drawing), and scoring a few images on the CPU only takes a second or two."""
+    _cache.clear()
+    edgemaps.load_model.cache_clear()
+    depth.load_model.cache_clear()
+    if _finder is not None:
+        _finder._sam = None
+        _finder.model.to("cpu")
+        _finder.device = "cpu"
+
+
 def head_regions(mask, face, size):
     """(head window, head core, feature zone) as boolean images."""
     x0, y0, x1, y1 = features.head_window(face, mask.shape)

@@ -195,17 +195,25 @@ It runs with one of two backends (`--refine-backend`, default `auto`):
 
 | Backend | Used on | Memory |
 |---|---|---|
-| [mflux](https://github.com/mflux-community/mflux) (MLX) | Macs with Apple silicon | about 8 GB extra at the default 8-bit; `--refine-quantize 4` for about 4 GB |
+| [mflux](https://github.com/mflux-community/mflux) (MLX) | Macs with Apple silicon | peaks around 6 GB at the default 4-bit; `--refine-quantize 8` around 7.5 GB |
 | [diffusers](https://github.com/huggingface/diffusers) (PyTorch) | everything else (CUDA GPU; CPU works but is very slow) | about 16 GB |
 
 If the package or the model is missing, the run stops right away with these instructions.
+
+With `--refine` a run works in two phases, so the drawing models and the editing model are never
+in memory together: first every photo is drawn and its original written, then the drawing models
+are released and every drawing is refined with one load of the editing model. With mflux, the
+image is encoded and decoded in tiles and the prompt encoder is only loaded while it's needed.
+On a 16 GB Mac a run peaks around 10 GB (while drawing a photo with several subjects), so it
+fits next to an editor and a browser. 8-bit has occasionally failed on a busy 16 GB Mac with a
+Metal "Impacting Interactivity" error; the original is kept when that happens.
 
 ```sh
 env/bin/python dog_lineart.py img/in/1.jpg -s fineline --refine auto
 env/bin/python dog_lineart.py img/in/1.jpg -s fineline --refine stylize --refine-prompt "thicker outline"
 ```
 
-Other options: `--refine-seed`, `--refine-quantize` (mflux: 8, 4 or 0 = full precision).
+Other options: `--refine-seed`, `--refine-quantize` (mflux: 4 (default), 8 or 0 = full precision).
 With `--debug`, the image sent to the model and its raw reply are saved too.
 
 ## Styles

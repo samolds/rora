@@ -36,6 +36,19 @@ def pick_device(requested: str = "auto") -> str:
     return "cpu"
 
 
+def free_device_memory():
+    """Return memory held by PyTorch's GPU allocator (after models are dropped) to the system."""
+    import gc
+
+    import torch
+
+    gc.collect()
+    if torch.backends.mps.is_available():
+        torch.mps.empty_cache()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+
 def load_image(path: Path, work_size: int) -> np.ndarray:
     """Load as RGB uint8, honoring EXIF rotation, with the long side scaled to work_size."""
     img = ImageOps.exif_transpose(Image.open(path)).convert("RGB")
