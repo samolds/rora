@@ -6,6 +6,8 @@ opencv-python-headless>=4.9,<5
 numpy>=1.26
 # Pillow 13's PIL._typing fails to import on Python 3.12 (mflux imports it)
 Pillow>=10.0,<13
+# .heic photos (iPhone)
+pillow-heif>=0.18
 controlnet-aux>=0.0.10
 scikit-image>=0.22
 scipy>=1.11

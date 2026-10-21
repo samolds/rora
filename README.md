@@ -198,6 +198,18 @@ env/bin/python lineart.py img/in -o out -s all --style-defaults
 Each takes roughly 20–25 minutes for about 50 photos on an Apple M-series Mac.
 `--no-preview` keeps each run in the loop from overwriting the same `_preview.png`.
 
+## Tests
+
+High-level tests run the whole pipeline once per style, on the demo photo converted to every
+input type (JPEG, PNG, HEIC, WebP, TIFF, and a short GIF/MP4/MOV pan), with different options each time.
+They take about 2 minutes, need the models from `setup.sh`, and write only to a temp folder:
+
+```sh
+env/bin/python -m unittest -v                                          # all
+env/bin/python -m unittest -v tests.test_pipeline.StyleTests.test_edges   # one
+RORA_KEEP_TEST_OUTPUT=1 env/bin/python -m unittest -v                   # keep the files to look at
+```
+
 ## Optional: refine with an image-editing model
 
 `--refine` adds a final pass that runs each finished drawing through an image-editing model

@@ -7,10 +7,12 @@ from pathlib import Path
 import cv2
 import numpy as np
 from PIL import Image, ImageOps
+from pillow_heif import register_heif_opener
 
 from . import env
 
 log = logging.getLogger(__name__)
+register_heif_opener()  # lets Pillow open .heic photos
 
 COCO_KINDS = {0: "person", 15: "cat", 16: "dog"}
 SUBJECTS = ("all", "auto", *COCO_KINDS.values())

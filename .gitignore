@@ -19,6 +19,8 @@ datasets/
 lab/
 
 # Personal photos and generated output (1.jpg is kept as a demo; it has no GPS metadata)
+img/sibs/*
+img/vid/*
 img/in/*
 !img/in/1.jpg
 img/peevin/
