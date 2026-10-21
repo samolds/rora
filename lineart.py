@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Photo of a dog, cat or person -> transparent PNG line art (for printing on shirts)."""
+"""Photo of a dog, cat or person -> transparent PNG line art (for printing on shirts).
+GIFs and videos (MP4, MOV) are drawn frame by frame into a GIF or video of the line art."""
 import argparse
 import hashlib
 import json
@@ -14,7 +15,7 @@ from rora import env  # noqa: F401  (must come before torch/ultralytics imports)
 import cv2
 import numpy as np
 
-from rora import export, refine, styles, tattoo
+from rora import export, refine, styles, tattoo, video
 from rora.segment import (COCO_KINDS, SUBJECTS, Segmenter, describe, free_device_memory,
                           load_image)
 
@@ -29,7 +30,10 @@ DEFAULT_DETAIL = 0.5
 
 # command-line options that change the output image (others, like --svg, don't)
 OUTPUT_OPTIONS = ("color", "size", "dpi", "pad", "min_speck", "outline", "antialias",
-                  "work_size", "min_conf", "detector", "segmenter", "subject")
+                  "work_size", "min_conf", "detector", "segmenter", "subject",
+                  "anim_size", "fps", "max_frames")
+STILL_ONLY = ("size", "dpi", "pad", "work_size")
+ANIMATION_ONLY = ("anim_size", "fps", "max_frames")
 
 # short names used in output file names (README has the same table)
 ABBREV = {
@@ -48,7 +52,7 @@ ABBREV = {
     # output options
     "color": "col", "size": "px", "dpi": "dpi", "pad": "pad", "min_speck": "spk",
     "outline": "ol", "antialias": "aa", "work_size": "ws", "min_conf": "mc",
-    "detector": "det", "segmenter": "seg",
+    "detector": "det", "segmenter": "seg", "anim_size": "as", "fps": "fps", "max_frames": "mf",
     # refine pass (only in refined files' names)
     "refine": "rf", "refine_seed": "rsd", "refine_quantize": "rq", "refine_prompt": "rp",
     "refine_model": "rmd",
@@ -65,18 +69,20 @@ def fmt(key: str, value) -> str:
     return f"{key}-{value}".replace("/", "-").replace(" ", "-")
 
 
-def settings_id(name: str, overrides: dict, args) -> tuple[str, str]:
+def settings_id(name: str, overrides: dict, args, animated: bool = False) -> tuple[str, str]:
     """(file name settings part, full settings JSON) for one style.
 
     The settings part is the style, its detail and weight, then any other setting that
     differs from the normal run's defaults (the style's own, with DEFAULT_SETTINGS applied),
     all in short form (ABBREV), e.g. `edges_d0.4_w1` or `fineline_d0.5_w3_f0.7`. Only
     settings the style uses count, so the same effective settings always give the same name.
+    `animated`: for GIFs and videos, which use the animation options instead of the print ones.
     """
     style = styles.STYLES[name]
     used = {k: v for k, v in {**style.defaults, **overrides}.items()
             if k in style.defaults or k == "invert"}
-    out_opts = {k: getattr(args, k) for k in OUTPUT_OPTIONS}
+    unused = STILL_ONLY if animated else ANIMATION_ONLY
+    out_opts = {k: getattr(args, k) for k in OUTPUT_OPTIONS if k not in unused}
     cli_defaults = vars(parse_args([]))
     baseline = {**style.defaults, **{k: v for k, v in DEFAULT_SETTINGS.items() if k in style.defaults}}
 
@@ -108,7 +114,7 @@ def refine_tag(mode: str, args) -> str:
 def parse_args(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("inputs", nargs="*", type=Path, default=[Path("img/in")],
-                    help="image files or folders (default: img/in)")
+                    help="image, GIF or video (MP4, MOV) files, or folders (default: img/in)")
     ap.add_argument("-o", "--out", type=Path, default=Path("img/out"))
     ap.add_argument("--sample", type=positive_int, metavar="N",
                     help="run only N images picked at random from the inputs (the seed is logged)")
@@ -158,6 +164,17 @@ def parse_args(argv=None):
     g.add_argument("--device", default="auto", help="auto | mps | cuda | cpu")
     g.add_argument("--detector", default="yolo11x.pt")
     g.add_argument("--segmenter", default="sam2.1_b.pt")
+
+    g = ap.add_argument_group("animation (GIF, MP4 and MOV inputs; drawn on the whole frame, "
+                              "written in the input's format; no --refine, --svg or --debug)")
+    g.add_argument("--anim-size", type=int, default=720,
+                   help="long side in px, for processing and output (instead of --work-size "
+                        "and --size) (default: 720)")
+    g.add_argument("--fps", type=float, default=12,
+                   help="draw at most this many frames per second, dropping the rest "
+                        "(0 = every frame) (default: 12)")
+    g.add_argument("--max-frames", type=int, default=0,
+                   help="draw only the first N frames (after --fps) (default: 0 = all)")
 
     g = ap.add_argument_group("refine (optional final pass through an image-editing model)")
     g.add_argument("--refine", choices=refine.MODES, default="off",
@@ -229,7 +246,8 @@ def collect_images(inputs: list[Path]) -> list[Path]:
     files = []
     for p in inputs:
         if p.is_dir():
-            files += sorted(f for f in p.iterdir() if f.suffix.lower() in IMAGE_EXTS)
+            files += sorted(f for f in p.iterdir()
+                            if f.suffix.lower() in IMAGE_EXTS | video.EXTS)
         elif p.is_file():
             files.append(p)
         else:
@@ -321,6 +339,65 @@ def draw_subjects(args, photo: str, rgb, subjects, names, ids, overrides, refine
     return written
 
 
+def draw_animation(args, path: Path, seg, names, ids, overrides, previews: list) -> int:
+    """Draw a GIF or video frame by frame on its whole frame, one animation per style in the
+    input's format; returns files written (0 if no subject was found in any frame)."""
+    frames, durations = video.read_frames(path, args.anim_size, args.fps, args.max_frames)
+    if not frames:
+        raise ValueError("no frames")
+    h, w = frames[0].shape[:2]
+    log.info("  %d frame(s) at %dx%d, %.1f fps", len(frames), w, h,
+             1000 * len(frames) / max(sum(durations), 1))
+
+    inks = {name: [] for name in names}
+    found = 0
+    rora_log = logging.getLogger("rora")
+    level = rora_log.level
+    rora_log.setLevel(logging.WARNING)  # the drawing steps' log lines would repeat every frame
+    try:
+        for i, rgb in enumerate(frames, 1):
+            t = time.perf_counter()
+            subjects = seg.find_subjects(rgb, args.subject, args.subject_conf)
+            mask = np.zeros((h, w), bool)
+            frame = {name: np.zeros((h, w), bool) for name in names}
+            for s in subjects:
+                mask |= s.mask
+                for name in names:
+                    frame[name] |= styles.render(name, rgb, s.mask, args.color == "white",
+                                                 {**overrides, "subject": s.kind})
+            for name in names:
+                ink = frame[name]
+                if args.outline:
+                    ink |= styles.silhouette(mask, args.outline)
+                inks[name].append(export.despeckle(ink, args.min_speck))
+            found += bool(subjects)
+            log.info("  frame %d/%d: %s (%.1fs)", i, len(frames),
+                     describe([s.kind for s in subjects]) if subjects else "nothing found",
+                     time.perf_counter() - t)
+            free_device_memory()
+    finally:
+        rora_log.setLevel(level)
+    if not found:
+        log.warning("  no %s found in any frame, skipping", args.subject
+                    if args.subject in COCO_KINDS.values() else "person, cat or dog")
+        return 0
+
+    suffix = path.suffix.lower()
+    sub_tag = "" if args.subject == "all" else f"_{args.subject}"
+    for name in names:
+        tag, settings = ids[name]
+        stem = f"{path.stem}{sub_tag}__{tag}"
+        out = args.out / f"{stem}{suffix}"
+        if suffix == ".gif":
+            video.save_gif(inks[name], out, args.color, durations, settings)
+        else:
+            video.save_video(inks[name], out, args.color, durations, args.antialias)
+        log.info("  %s: %s %dx%d, %d frame(s)", name, out.name, w, h, len(frames))
+        middle = inks[name][len(frames) // 2]
+        previews.append((stem, export.to_rgba(middle, args.color, args.antialias)))
+    return len(names)
+
+
 @dataclass
 class RefineJob:
     """A finished drawing waiting for the refine phase (ink and mask bit-packed to save memory)."""
@@ -394,6 +471,13 @@ def main(argv=None) -> int:
     ids = {n: settings_id(n, overrides, args) for n in names}
     for n, (tag, text) in ids.items():
         log.info("  %s -> <photo>__%s.png  %s", n, tag, text)
+    anim_ids = {n: settings_id(n, overrides, args, animated=True) for n in names}
+    anims = [f for f in files if video.is_animation(f)]
+    if anims:
+        for n, (tag, text) in anim_ids.items():
+            log.info("  %s -> <clip>__%s.gif|.mp4|.mov  %s", n, tag, text)
+        if args.refine != "off" or args.svg or args.debug:
+            log.warning("  --refine, --svg and --debug are skipped for GIFs and videos")
     used_keys = {k for n in names for k in styles.STYLES[n].defaults} | {"invert"}
     ignored = sorted({s.partition("=")[0] for s in args.set} - used_keys)
     if ignored:
@@ -427,6 +511,13 @@ def main(argv=None) -> int:
     for i, path in enumerate(files, 1):
         log.info("[%d/%d] %s", i, len(files), path.name)
         try:
+            if video.is_animation(path):
+                n = draw_animation(args, path, seg, names, anim_ids, overrides, previews)
+                written += n
+                if not n:
+                    skipped.append(path.name)
+                continue  # draw_animation frees device memory after every frame
+
             rgb = load_image(path, args.work_size)
             subjects = seg.find_subjects(rgb, args.subject, args.subject_conf)
             if not subjects:

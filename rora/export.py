@@ -7,6 +7,8 @@ import numpy as np
 from PIL import Image, ImageDraw, PngImagePlugin, PngImagePlugin
 
 COLORS = {"white": (255, 255, 255), "black": (0, 0, 0)}
+# shirt-like background behind each ink colour, for previews and videos
+BACKGROUNDS = {"white": (18, 18, 18), "black": (235, 235, 235)}
 
 
 def despeckle(ink: np.ndarray, min_area: int) -> np.ndarray:
@@ -77,7 +79,7 @@ def save_preview(items: list[tuple[str, Image.Image]], path: Path, color: str, t
     """Contact sheet on a shirt-like background so you can judge the print."""
     if not items:
         return
-    bg = (18, 18, 18) if color == "white" else (235, 235, 235)
+    bg = BACKGROUNDS[color]
     cols = min(4, len(items))
     rows = -(-len(items) // cols)
     label_h = 28

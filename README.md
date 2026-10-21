@@ -7,7 +7,8 @@ The pipeline finds the people, cats and dogs in each photo, cuts them out, and d
 one of several styles, including minimalist tattoo-style line art. By default every subject
 detected with high confidence is drawn, all together in one image; `--subject auto` draws only
 the main one (the biggest, most central), and `--subject dog` (or `cat`, `person`) draws each
-one of that kind in its own image.
+one of that kind in its own image. GIFs and videos (MP4, MOV) work too, frame by frame (see
+[GIFs and videos](#gifs-and-videos)).
 
 ## Sam's Favorite Runs
 
@@ -79,9 +80,9 @@ The full settings are also embedded in each PNG (text field `dog_lineart_setting
 | `sd` | seed | `ae` | almond_eyes | `rsd` | --refine-seed |
 | `xh` | crosshatch | `pu` | pupils | `rq` | --refine-quantize |
 | `lv` | levels | `ns` | nose_solid | `rp` | --refine-prompt (short hash) |
-| `lt` | light | `mb` | max_blobs | | |
-| `rm` | rim | `dk` | darkness | | |
-| `la` | light_angle | `or` | outline_ratio | | |
+| `lt` | light | `mb` | max_blobs | `as` | --anim-size |
+| `rm` | rim | `dk` | darkness | `fps` | --fps |
+| `la` | light_angle | `or` | outline_ratio | `mf` | --max-frames |
 | `gr` | grain | `tp` | taper | | |
 | | | `ps` | passes | | |
 | | | `wb` | wobble | | |
@@ -134,6 +135,32 @@ Useful options: `--detail 0..1` (how much is drawn), `--weight N` (line width),
 least `--subject-conf` 0.8 confidence, plus the main one, together in one image; `auto`: only
 the main subject; a kind: each one of that kind, in its own image).
 Run `python lineart.py --help` for the full list.
+
+### GIFs and videos
+
+GIF, MP4 and MOV inputs (files, or in a folder alongside photos) are drawn frame by frame and
+written back in the same format, one per style: `clip.gif` -> `clip__edges_d0.5_w2.gif`.
+Each frame is drawn on the whole frame (no cropping to the subject), so nothing jumps around.
+GIFs are transparent with hard edges; MP4 and MOV have no transparency, so the lines are drawn
+on the same dark (or, with `--color black`, light) background as the preview.
+
+```sh
+python lineart.py img/in/clip.mp4 -s ink edges
+python lineart.py img/in/clip.gif -s fineline --fps 8 --max-frames 40
+```
+
+- `--anim-size` (default 720): long side in px; frames are processed and written at this
+  size (`--work-size`, `--size`, `--pad` and `--dpi` are for photos only).
+- `--fps` (default 12): at most this many frames per second; the rest are dropped and the
+  kept ones shown longer, so the clip keeps its length. `--fps 0` draws every frame.
+- `--max-frames N`: only the first N frames (after `--fps`), handy for trying settings.
+- Every frame is detected and drawn on its own (no tracking), so lines and outlines change a
+  little from frame to frame. Frames with no subject are left empty. With `--subject` other than
+  `all`, the matching subjects of every frame are drawn together and the name gets
+  `_auto`, `_dog`, etc.
+- `--refine`, `--svg` and `--debug` are skipped for them. The preview shows the middle frame.
+- Each frame takes a few seconds, so a 10-second clip at 12 fps (120 frames) takes a while.
+  The video's sound is not kept.
 
 With no options, `python lineart.py` runs every photo in `img/in/` with:
 
