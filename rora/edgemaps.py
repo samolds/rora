@@ -5,6 +5,7 @@ mouth, ears, toes), which is what pass 2 relies on.
 """
 import logging
 import time
+import warnings
 from functools import lru_cache
 
 import cv2
@@ -84,9 +85,24 @@ def map_regions(flat, mask, k: int = 5):
 
 # ---------- pretrained maps ----------
 
+# known-harmless noise from importing controlnet_aux, which eagerly imports every annotator;
+# 0.0.10 is the latest release, so these can't be fixed from our side
+_CONTROLNET_AUX_IMPORT_WARNINGS = [
+    (r"`torch\.jit\.script` is deprecated", FutureWarning),  # teed/Fsmish.py
+    (r"The module 'mediapipe' is not installed", UserWarning),  # MediapipeFace, which we don't use
+    (r"Overwriting tiny_vit_\w+ in registry", UserWarning),  # its SAM copy vs timm's
+    (r"Importing from timm\.models\.(layers|registry) is deprecated", FutureWarning),
+    (r"Please import `\w+` from the `scipy\.ndimage` namespace", DeprecationWarning),  # open_pose
+]
+
+
 @lru_cache(maxsize=None)
 def load_model(name: str, device: str):
-    import controlnet_aux
+    # scoped here (not global) so it also holds when a runner like unittest resets the filters
+    with warnings.catch_warnings():
+        for msg, cat in _CONTROLNET_AUX_IMPORT_WARNINGS:
+            warnings.filterwarnings("ignore", message=msg, category=cat)
+        import controlnet_aux
 
     cls_name, _ = ML_MODELS[name]
     t = time.perf_counter()

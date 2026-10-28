@@ -1,4 +1,5 @@
 """Keep every model, cache and setting inside this project folder. Import before torch/ultralytics."""
+import logging
 import os
 from pathlib import Path
 
@@ -22,6 +23,9 @@ os.environ.setdefault("YOLO_CONFIG_DIR", str(MODELS / "ultralytics"))
 # the xet transfer backend failed mid-download for the line-art weights; plain HTTP works
 os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
 os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
+
+# transformers imports torch.distributed.checkpoint, which logs this on every macOS import
+logging.getLogger("torch.distributed.elastic.multiprocessing.redirects").setLevel(logging.ERROR)
 
 HF_REPOS = ["lllyasviel/Annotators", "google/owlv2-base-patch16-ensemble",
             "depth-anything/Depth-Anything-V2-Small-hf"]
