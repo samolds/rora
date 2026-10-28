@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Photo of a dog, cat or person -> transparent PNG line art (for printing on shirts).
-GIFs and videos (MP4, MOV) are drawn frame by frame into a GIF or video of the line art."""
+GIFs and videos (MP4, MOV) are drawn frame by frame into a GIF (and, for videos, a video in the
+input's format) of the line art."""
 import argparse
 import hashlib
 import json
@@ -167,7 +168,8 @@ def parse_args(argv=None):
     g.add_argument("--segmenter", default="sam2.1_b.pt")
 
     g = ap.add_argument_group("animation (GIF, MP4 and MOV inputs; drawn on the whole frame, "
-                              "written in the input's format; no --refine, --svg or --debug)")
+                              "written in the input's format, plus a transparent GIF for videos; "
+                              "no --refine, --svg or --debug)")
     g.add_argument("--anim-size", type=int, default=720,
                    help="long side in px, for processing and output (instead of --work-size "
                         "and --size) (default: 720)")
@@ -346,7 +348,8 @@ def draw_subjects(args, photo: str, rgb, subjects, names, ids, overrides, refine
 
 def draw_animation(args, path: Path, seg, names, ids, overrides, previews: list) -> int:
     """Draw a GIF or video frame by frame on its whole frame, one animation per style in the
-    input's format; returns files written (0 if no subject was found in any frame)."""
+    input's format plus a transparent GIF for videos; returns files written (0 if no subject
+    was found in any frame)."""
     frames, durations = video.read_frames(path, args.anim_size, args.fps, args.max_frames)
     if not frames:
         raise ValueError("no frames")
@@ -403,18 +406,22 @@ def draw_animation(args, path: Path, seg, names, ids, overrides, previews: list)
         rora_log.setLevel(level)
     suffix = path.suffix.lower()
     sub_tag = "" if args.subject == "all" else f"_{args.subject}"
+    written = 0
     for name in names:
         tag, settings = ids[name]
         stem = f"{path.stem}{sub_tag}__{tag}"
-        out = args.out / f"{stem}{suffix}"
-        if suffix == ".gif":
-            video.save_gif(inks[name], out, args.color, durations, settings)
-        else:
-            video.save_video(inks[name], out, args.color, durations, args.antialias)
-        log.info("  %s: %s %dx%d, %d frame(s)", name, out.name, w, h, len(frames))
+        gif = args.out / f"{stem}.gif"
+        video.save_gif(inks[name], gif, args.color, durations, settings)
+        outs = [gif]
+        if suffix != ".gif":
+            outs.insert(0, args.out / f"{stem}{suffix}")
+            video.save_video(inks[name], outs[0], args.color, durations, args.antialias)
+        written += len(outs)
+        log.info("  %s: %s %dx%d, %d frame(s)", name, " + ".join(o.name for o in outs), w, h,
+                 len(frames))
         middle = inks[name][len(frames) // 2]
         previews.append((stem, export.to_rgba(middle, args.color, args.antialias)))
-    return len(names)
+    return written
 
 
 @dataclass
@@ -494,7 +501,7 @@ def main(argv=None) -> int:
     anims = [f for f in files if video.is_animation(f)]
     if anims:
         for n, (tag, text) in anim_ids.items():
-            log.info("  %s -> <clip>__%s.gif|.mp4|.mov  %s", n, tag, text)
+            log.info("  %s -> <clip>__%s.gif (+ .mp4|.mov for videos)  %s", n, tag, text)
         if args.refine != "off" or args.svg or args.debug:
             log.warning("  --refine, --svg and --debug are skipped for GIFs and videos")
     used_keys = {k for n in names for k in styles.STYLES[n].defaults} | {"invert"}

@@ -115,19 +115,22 @@ class PipelineTestCase(unittest.TestCase):
     def check_clip(self, style: str, ext: str, *opts: str, frames: int = 2):
         out = self.run_pipeline(style, ext, *opts)
         color = "black" if "black" in opts else "white"
-        files = sorted(out.glob(f"*__{style}_*{ext}"))
-        self.assertEqual(len(files), 1, f"expected one {style} {ext} in {out}")
-        if ext == ".gif":
-            with Image.open(files[0]) as im:
-                self.assertEqual(im.n_frames, frames)
-                self.assertEqual(max(im.size), ANIM_SIZE)
-                self.assertIn("transparency", im.info)
-                self.assertEqual(json.loads(im.info["comment"])["style"], style)
-                inked = 0
-                for i in range(im.n_frames):
-                    im.seek(i)
-                    inked += bool((np.asarray(im.convert("RGBA"))[..., 3] > 0).any())
-        else:
+        gifs = sorted(out.glob(f"*__{style}_*.gif"))
+        self.assertEqual(len(gifs), 1, f"expected one {style} .gif in {out}")
+        with Image.open(gifs[0]) as im:
+            self.assertEqual(im.n_frames, frames)
+            self.assertEqual(max(im.size), ANIM_SIZE)
+            self.assertIn("transparency", im.info)
+            self.assertEqual(json.loads(im.info["comment"])["style"], style)
+            inked = 0
+            for i in range(im.n_frames):
+                im.seek(i)
+                inked += bool((np.asarray(im.convert("RGBA"))[..., 3] > 0).any())
+        self.assertGreater(inked, 0, f"{gifs[0].name} has no ink in any frame")
+        files = gifs
+        if ext != ".gif":
+            files = sorted(out.glob(f"*__{style}_*{ext}"))
+            self.assertEqual(len(files), 1, f"expected one {style} {ext} in {out}")
             cap = cv2.VideoCapture(str(files[0]))
             size = (cap.get(cv2.CAP_PROP_FRAME_WIDTH), cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
             self.assertEqual(max(size), ANIM_SIZE)

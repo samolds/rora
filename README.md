@@ -140,6 +140,7 @@ Run `python lineart.py --help` for the full list.
 
 GIF, MP4 and MOV inputs (files, or in a folder alongside photos) are drawn frame by frame and
 written back in the same format, one per style: `clip.gif` -> `clip__edges_d0.5_w2.gif`.
+Videos also get a transparent GIF: `clip.mp4` -> `clip__edges_d0.5_w2.mp4` and `.gif`.
 Each frame is drawn on the whole frame (no cropping to the subject), so nothing jumps around.
 GIFs are transparent with hard edges; MP4 and MOV have no transparency, so the lines are drawn
 on the same dark (or, with `--color black`, light) background as the preview.
