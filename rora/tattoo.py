@@ -67,7 +67,8 @@ def head_regions(mask, face, size):
 
 def get_strokes(rgb, mask, p):
     """Passes 1-3 (+ head pass), cached so several tattoo styles on one dog share the work."""
-    key = (rgb.shape, int(mask.sum()), hash(rgb[::37, ::37].tobytes()))
+    kind = p.get("subject", "dog")
+    key = (rgb.shape, int(mask.sum()), hash(rgb[::37, ::37].tobytes()), kind)
     if _cache.get("key") != key:
         _cache.clear()
         _cache["key"] = key
@@ -78,7 +79,7 @@ def get_strokes(rgb, mask, p):
     face = None
     if p["features"]:
         if "face" not in _cache:
-            _cache["face"] = get_finder(device).find_features(rgb, mask, p.get("subject", "dog"))
+            _cache["face"] = get_finder(device).find_features(rgb, mask, kind)
             if _cache["face"] is not None:
                 _cache["head_maps"] = features.head_maps(rgb, mask, _cache["face"], device)
         face = _cache["face"]
@@ -117,7 +118,8 @@ def get_strokes(rgb, mask, p):
         if face is not None:
             inner = cleanup.clip_paths(inner, ~zone, 0.02 * size)  # smoothing may drift into features
             feature_lines, feature_fills = facedraw.draw_face(face, rgb, mask, size, bool(q["nose_solid"]),
-                                                              bool(q["almond_eyes"]), bool(q["pupils"]))
+                                                              bool(q["almond_eyes"]), bool(q["pupils"]),
+                                                              kind)
             blobs = blobs + feature_fills
         _cache[skey] = (inner + feature_lines, outline, blobs)
     return _cache[skey]

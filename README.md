@@ -130,7 +130,8 @@ python lineart.py --list-styles
 
 Useful options: `--detail 0..1` (how much is drawn), `--weight N` (line width),
 `--set key=value` (any style setting), `--size` / `--dpi` (print size, default
-3600 px at 300 DPI = 12"), `--svg`, `--no-preview`, `--debug` (saves each subject's cut-out),
+3600 px at 300 DPI = 12"), `--svg`, `--sticker` (WhatsApp sticker, see
+[WhatsApp stickers](#whatsapp-stickers)), `--no-preview`, `--debug` (saves each subject's cut-out),
 `--subject all|auto|dog|cat|person` (default `all`: every person, cat and dog detected with at
 least `--subject-conf` 0.8 confidence, plus the main one, together in one image; `auto`: only
 the main subject; a kind: each one of that kind, in its own image).
@@ -141,6 +142,8 @@ Run `python lineart.py --help` for the full list.
 GIF, MP4 and MOV inputs (files, or in a folder alongside photos) are drawn frame by frame and
 written back in the same format, one per style: `clip.gif` -> `clip__edges_d0.5_w2.gif`.
 Videos also get a transparent GIF: `clip.mp4` -> `clip__edges_d0.5_w2.mp4` and `.gif`.
+Every clip also gets an animated WhatsApp sticker, `clip__edges_d0.5_w2.webp` (see
+[WhatsApp stickers](#whatsapp-stickers); `--no-sticker` skips it).
 Each frame is drawn on the whole frame (no cropping to the subject), so nothing jumps around.
 GIFs are transparent with hard edges; MP4 and MOV have no transparency, so the lines are drawn
 on the same dark (or, with `--color black`, light) background as the preview.
@@ -168,6 +171,21 @@ python lineart.py img/in/clip.gif -s fineline --fps 8 --max-frames 40
 - `--refine`, `--svg` and `--debug` are skipped for them. The preview shows the middle frame.
 - Each frame takes a few seconds, so a 10-second clip at 12 fps (120 frames) takes a while.
   The video's sound is not kept.
+
+### WhatsApp stickers
+
+`--sticker` also writes each drawing as a WhatsApp sticker: a 512x512 transparent `.webp`
+next to the PNG. It's on by default for GIFs and videos (animated) and off for photos;
+`--no-sticker` turns it off for clips too.
+
+- The lines are cropped to where they are drawn (across all frames for a clip, so it doesn't
+  jump), fitted inside a 16 px margin, and get a thin halo in the background colour so white
+  ink still shows on a light chat background (and black ink on a dark one).
+- WhatsApp only takes stickers up to 100 KB (500 KB animated) and 10 s. Longer clips are
+  trimmed to 10 s; if a file is too big it's saved lossy, then (for clips) with every other
+  frame dropped. The log says when either happened, or if it still doesn't fit.
+- To send one, share the `.webp` to WhatsApp (e.g. from Files on a phone), or add it to a
+  sticker pack with a sticker-maker app.
 
 With no options, `python lineart.py` runs every photo in `img/in/` with:
 
@@ -338,7 +356,8 @@ features (eyes, nose, mouth, ears, feet) with no shading.
 5. **Pass 3, artistic cleanup**: strokes are smoothed into flowing curves, the outline is
    simplified (fur tufts removed), and clutter is removed. `--set freedom=0..1` controls how
    far it may stylise away from the photo.
-6. **Draw**: the eyes (traced outline), nose (shape + nostrils) and mouth (lip line) are
+6. **Draw**: the eyes (traced outline), nose (for dogs, shape + nostrils; for cats and
+   people, a line under the nose) and mouth (lip line) are
    drawn deliberately, then everything is rendered in each line look.
    `--set almond_eyes=1` uses a stylised almond eye shape; `--set pupils=1` adds pupils.
 
@@ -438,7 +457,7 @@ Shared by all six:
 | Face | `features` | 1 | 0 / 1 | find and draw eyes, nose, mouth deliberately |
 | | `almond_eyes` | 0 | 0 / 1 | stylised almond eyes instead of the traced eye shape |
 | | `pupils` | 0 | 0 / 1 | add pupils with a highlight |
-| | `nose_solid` | 0 (`bold`: 1) | 0 / 1 | solid nose with a highlight instead of outline + nostrils |
+| | `nose_solid` | 0 (`bold`: 1) | 0 / 1 | solid nose with a highlight instead of outline + nostrils (dogs only) |
 | Without face finding | `max_blobs` | 0 | 0 – 5 | fill the darkest round blobs (eyes/nose) found in pass 2; for `features=0` |
 | | `darkness` | 0.15 | 0.05 – 0.4 | how much darker than its surroundings a blob must be |
 
@@ -475,6 +494,7 @@ Specific to each look:
 | `rora/edgemaps.py`, `rora/strokes.py`, `rora/cleanup.py` | tattoo passes 1, 2 and 3 |
 | `rora/tattoo.py`, `rora/styles.py` | line looks and other styles |
 | `rora/export.py` | PNG / SVG / preview output |
+| `rora/sticker.py` | WhatsApp sticker (`.webp`) output |
 | `rora/refine.py` | optional `--refine` pass (FLUX.2 [klein] 4B via mflux or diffusers) |
 | `rora/env.py` | keeps model downloads and settings in `./models` |
 | `setup.sh` | one-time setup |

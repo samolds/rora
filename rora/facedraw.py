@@ -1,5 +1,6 @@
 """Draw the face features on purpose: eyes (their own traced outline, or an optional almond
-template; pupils optional), a shaped nose with nostrils, and the mouth as a lip line.
+template; pupils optional), the nose (for dogs, a shaped nose with nostrils; for cats and
+people, a line under it), and the mouth as a lip line.
 Shapes come from each feature's SAM mask, then get tidied like an artist would.
 
 Returns strokes (polylines drawn in the current line look) and fills. A fill is a list of
@@ -173,12 +174,15 @@ def nose_outline(f: Feature, size: float) -> np.ndarray:
                           step=max(1.0, 0.002 * size), closed=True)
 
 
-def draw_nose(face: Face, size: float, solid: bool,
-              frontal: bool) -> tuple[list, list, np.ndarray | None]:
-    """Returns strokes, fills, and the nose bottom-center point (for the philtrum)."""
+def draw_nose(face: Face, size: float, solid: bool, frontal: bool,
+              kind: str = "dog") -> tuple[list, list, np.ndarray | None]:
+    """Returns strokes, fills, and the nose bottom-center point (for the philtrum, dogs only).
+    Only dogs get the dog nose (outline + nostrils, or solid); other kinds get a nose line."""
     f = face.nose
     if not has_mask(f):
         return [], [], None
+    if kind != "dog":
+        return nose_line(face, size), [], None
     ang = face_angle(face)
     outline = nose_outline(f, size)
     c = outline.mean(0)
@@ -200,6 +204,19 @@ def draw_nose(face: Face, size: float, solid: bool,
         p = from_face(np.array([[dx, dy]], np.float32), c, ang)[0]
         fills.append([ellipse(p, 0.11 * w, 0.07 * w, ang + tilt, 24)])
     return [outline], fills, bottom
+
+
+def nose_line(face: Face, size: float) -> list:
+    """Just the underside of the nose, as one curve (how people and cats are usually drawn)."""
+    ang = face_angle(face)
+    pts = mask_points(face.nose)
+    c = pts.mean(0)
+    local = to_face(pts, c, ang)
+    bins = max(6, int(float(np.ptp(local[:, 0])) / max(2.0, 0.006 * size)))
+    under = edge_profile(local, top=False, bins=bins)
+    if len(under) < 2:
+        return []
+    return [cleanup.spline(from_face(under, c, ang), 0.004 * size, max(1.0, 0.002 * size))]
 
 
 # ---------- mouth ----------
@@ -250,9 +267,10 @@ def draw_mouth(face: Face, size: float, nose_bottom, frontal: bool) -> list:
 # ---------- entry point ----------
 
 def draw_face(face: Face, rgb: np.ndarray, mask: np.ndarray, size: float, nose_solid: bool,
-              almond_eyes: bool = False, pupils: bool = False) -> tuple[list, list]:
+              almond_eyes: bool = False, pupils: bool = False,
+              kind: str = "dog") -> tuple[list, list]:
     frontal = facing_us(face, mask)
     eye_strokes, eye_fills = draw_eyes(face, rgb, size, almond_eyes, pupils)
-    nose_strokes, nose_fills, nose_bottom = draw_nose(face, size, nose_solid, frontal)
+    nose_strokes, nose_fills, nose_bottom = draw_nose(face, size, nose_solid, frontal, kind)
     mouth_strokes = draw_mouth(face, size, nose_bottom, frontal)
     return eye_strokes + nose_strokes + mouth_strokes, eye_fills + nose_fills

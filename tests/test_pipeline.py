@@ -109,6 +109,10 @@ class PipelineTestCase(unittest.TestCase):
             self.assertTrue(ink.any(), f"{png.name} has no ink")
             self.assertTrue((rgba[ink][:, :3] == export.COLORS[color]).all())
             self.assertEqual(png.with_suffix(".svg").exists(), "--svg" in opts)
+            self.assertEqual(png.with_suffix(".webp").exists(), "--sticker" in opts)
+            if "--sticker" in opts:
+                with Image.open(png.with_suffix(".webp")) as im:
+                    self.assertEqual((im.format, im.size), ("WEBP", (512, 512)))
         self.assertEqual((out / "_preview.png").exists(), "--no-preview" not in opts)
         self.assertTrue((out / "run.log").exists())
 
@@ -145,6 +149,15 @@ class PipelineTestCase(unittest.TestCase):
             cap.release()
             self.assertEqual(n, frames)
         self.assertGreater(inked, 0, f"{files[0].name} has no ink in any frame")
+        stickers = sorted(out.glob(f"*__{style}_*.webp"))
+        if "--no-sticker" in opts:
+            self.assertEqual(stickers, [])
+        else:
+            self.assertEqual(len(stickers), 1, f"expected one {style} .webp sticker in {out}")
+            with Image.open(stickers[0]) as im:
+                self.assertEqual((im.format, im.size), ("WEBP", (512, 512)))
+                self.assertEqual(im.n_frames, frames)
+                self.assertTrue((np.asarray(im.convert("RGBA"))[..., 3] == 0).any())
         self.assertEqual((out / "_preview.png").exists(), "--no-preview" not in opts)
 
 
@@ -190,14 +203,15 @@ class StyleTests(PipelineTestCase):
         self.check_still("noir", ".jpg", "--style-defaults", "--no-preview")
 
     def test_sketch(self):
-        self.check_clip("sketch", ".gif", "--color", "black", "--outline", "2", "--no-preview")
+        self.check_clip("sketch", ".gif", "--color", "black", "--outline", "2", "--no-preview",
+                        "--no-sticker")
 
     # tattoo looks (slower: several models per subject)
     def test_fineline(self):
         self.check_still("fineline", ".jpg", "--svg", "--set", "almond_eyes=1")
 
     def test_bold(self):
-        self.check_still("bold", ".png", "--color", "black")
+        self.check_still("bold", ".png", "--color", "black", "--sticker")
 
     def test_brush(self):
         self.check_still("brush", ".webp", "--detail", "0")

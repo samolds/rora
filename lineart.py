@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Photo of a dog, cat or person -> transparent PNG line art (for printing on shirts).
 GIFs and videos (MP4, MOV) are drawn frame by frame into a GIF (and, for videos, a video in the
-input's format) of the line art."""
+input's format) of the line art, plus an animated WhatsApp sticker (.webp)."""
 import argparse
 import hashlib
 import json
@@ -16,7 +16,7 @@ from rora import env  # noqa: F401  (must come before torch/ultralytics imports)
 import cv2
 import numpy as np
 
-from rora import export, refine, styles, tattoo, track, video
+from rora import export, refine, sticker, styles, tattoo, track, video
 from rora.segment import (COCO_KINDS, SUBJECTS, Segmenter, describe, free_device_memory,
                           load_image)
 
@@ -147,6 +147,9 @@ def parse_args(argv=None):
     g.add_argument("--outline", type=int, default=0, help="add a silhouette outline this wide (px)")
     g.add_argument("--antialias", action="store_true", help="soft edges (hard by default)")
     g.add_argument("--svg", action="store_true", help="also write traced .svg files")
+    g.add_argument("--sticker", action=argparse.BooleanOptionalAction, default=None,
+                   help="also write a WhatsApp sticker (.webp, 512x512, animated for GIFs and "
+                        "videos) (default: on for GIFs and videos, off for photos)")
     g.add_argument("--preview", action=argparse.BooleanOptionalAction, default=True,
                    help="write _preview.png contact sheet (default: on)")
     g.add_argument("--debug", action="store_true", help="save mask and cut-out per photo")
@@ -168,8 +171,8 @@ def parse_args(argv=None):
     g.add_argument("--segmenter", default="sam2.1_b.pt")
 
     g = ap.add_argument_group("animation (GIF, MP4 and MOV inputs; drawn on the whole frame, "
-                              "written in the input's format, plus a transparent GIF for videos; "
-                              "no --refine, --svg or --debug)")
+                              "written in the input's format, plus a transparent GIF for videos "
+                              "and a WhatsApp sticker; no --refine, --svg or --debug)")
     g.add_argument("--anim-size", type=int, default=720,
                    help="long side in px, for processing and output (instead of --work-size "
                         "and --size) (default: 720)")
@@ -279,13 +282,16 @@ def list_styles():
 
 
 def save_outputs(args, ink: np.ndarray, stem: str, settings: str):
-    """Write <stem>.png (and .svg); returns the PNG image and a log message."""
+    """Write <stem>.png (and .svg, .webp sticker); returns the PNG image and a log message."""
     img = export.save_png(ink, args.out / f"{stem}.png", args.color, args.antialias, args.dpi,
                           settings)
     msg = f"{stem}.png {img.width}x{img.height}"
     if args.svg:
         n = export.save_svg(ink, args.out / f"{stem}.svg", args.color, settings=settings)
         msg += f" + .svg ({n} paths)"
+    if args.sticker:
+        note = sticker.save([ink], args.out / f"{stem}.webp", args.color)
+        msg += f" + .webp sticker{f' ({note})' if note else ''}"
     return img, msg
 
 
@@ -348,8 +354,8 @@ def draw_subjects(args, photo: str, rgb, subjects, names, ids, overrides, refine
 
 def draw_animation(args, path: Path, seg, names, ids, overrides, previews: list) -> int:
     """Draw a GIF or video frame by frame on its whole frame, one animation per style in the
-    input's format plus a transparent GIF for videos; returns files written (0 if no subject
-    was found in any frame)."""
+    input's format plus a transparent GIF for videos and (unless --no-sticker) an animated
+    WhatsApp sticker; returns files written (0 if no subject was found in any frame)."""
     frames, durations = video.read_frames(path, args.anim_size, args.fps, args.max_frames)
     if not frames:
         raise ValueError("no frames")
@@ -416,9 +422,13 @@ def draw_animation(args, path: Path, seg, names, ids, overrides, previews: list)
         if suffix != ".gif":
             outs.insert(0, args.out / f"{stem}{suffix}")
             video.save_video(inks[name], outs[0], args.color, durations, args.antialias)
+        note = ""
+        if args.sticker is not False:
+            outs.append(args.out / f"{stem}.webp")
+            note = sticker.save(inks[name], outs[-1], args.color, durations)
         written += len(outs)
-        log.info("  %s: %s %dx%d, %d frame(s)", name, " + ".join(o.name for o in outs), w, h,
-                 len(frames))
+        log.info("  %s: %s %dx%d, %d frame(s)%s", name, " + ".join(o.name for o in outs), w, h,
+                 len(frames), f" (sticker: {note})" if note else "")
         middle = inks[name][len(frames) // 2]
         previews.append((stem, export.to_rgba(middle, args.color, args.antialias)))
     return written
@@ -501,7 +511,8 @@ def main(argv=None) -> int:
     anims = [f for f in files if video.is_animation(f)]
     if anims:
         for n, (tag, text) in anim_ids.items():
-            log.info("  %s -> <clip>__%s.gif (+ .mp4|.mov for videos)  %s", n, tag, text)
+            log.info("  %s -> <clip>__%s.gif (+ .mp4|.mov for videos%s)  %s", n, tag,
+                     "" if args.sticker is False else ", .webp sticker", text)
         if args.refine != "off" or args.svg or args.debug:
             log.warning("  --refine, --svg and --debug are skipped for GIFs and videos")
     used_keys = {k for n in names for k in styles.STYLES[n].defaults} | {"invert"}
