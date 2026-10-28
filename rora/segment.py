@@ -133,12 +133,16 @@ class Segmenter:
             log.info("  drawing: %s", ", ".join(f"{kinds[j]} {scores[j]:.2f}" for j in order))
 
         t = time.perf_counter()
-        seg = self.segmenter(bgr, bboxes=[boxes[j] for j in order], device=self.device,
-                             verbose=False)[0]
-        masks = seg.masks.data.cpu().numpy() > 0.5
+        masks = self.segment(rgb, [boxes[j] for j in order])
         log.info("  segment: %.1fs", time.perf_counter() - t)
-        return [Subject(clean_mask(m), tuple(boxes[j]), scores[j], kinds[j])
-                for m, j in zip(masks, order)]
+        return [Subject(m, tuple(boxes[j]), scores[j], kinds[j]) for m, j in zip(masks, order)]
+
+    def segment(self, rgb: np.ndarray, boxes: list) -> list[np.ndarray]:
+        """A cleaned-up mask (see clean_mask) of the thing in each box."""
+        bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+        seg = self.segmenter(bgr, bboxes=[list(b) for b in boxes], device=self.device,
+                             verbose=False)[0]
+        return [clean_mask(m) for m in seg.masks.data.cpu().numpy() > 0.5]
 
     def find_subject(self, rgb: np.ndarray, subject: str = "auto") -> Subject | None:
         """The main subject (or the main one of kind `subject`), or None if there is none."""

@@ -83,7 +83,7 @@ The full settings are also embedded in each PNG (text field `dog_lineart_setting
 | `lt` | light | `mb` | max_blobs | `as` | --anim-size |
 | `rm` | rim | `dk` | darkness | `fps` | --fps |
 | `la` | light_angle | `or` | outline_ratio | `mf` | --max-frames |
-| `gr` | grain | `tp` | taper | | |
+| `gr` | grain | `tp` | taper | `sty` | --steady |
 | | | `ps` | passes | | |
 | | | `wb` | wobble | | |
 | | | `gp` | gaps | | |
@@ -154,8 +154,14 @@ python lineart.py img/in/clip.gif -s fineline --fps 8 --max-frames 40
 - `--fps` (default 12): at most this many frames per second; the rest are dropped and the
   kept ones shown longer, so the clip keeps its length. `--fps 0` draws every frame.
 - `--max-frames N`: only the first N frames (after `--fps`), handy for trying settings.
-- Every frame is detected and drawn on its own (no tracking), so lines and outlines change a
-  little from frame to frame. Frames with no subject are left empty. With `--subject` other than
+- `--steady` (default 0.5): every frame is detected on its own, so a subject in an odd pose
+  can be missed for a few frames and blink out. Detections are followed from frame to frame,
+  and a subject found in more than this fraction of the frames is cut out again in the frames
+  where it was missed, from its box in the frames around them (the log lists which frames were
+  filled in). A cut-out much bigger or smaller than the subject's nearest detection, or on top
+  of another subject, is dropped. `--steady 1` turns this off.
+- Each frame is drawn on its own, so lines and outlines change a little from frame to frame.
+  Frames with no subject are left empty. With `--subject` other than
   `all`, the matching subjects of every frame are drawn together and the name gets
   `_auto`, `_dog`, etc.
 - `--refine`, `--svg` and `--debug` are skipped for them. The preview shows the middle frame.

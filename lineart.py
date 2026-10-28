@@ -15,7 +15,7 @@ from rora import env  # noqa: F401  (must come before torch/ultralytics imports)
 import cv2
 import numpy as np
 
-from rora import export, refine, styles, tattoo, video
+from rora import export, refine, styles, tattoo, track, video
 from rora.segment import (COCO_KINDS, SUBJECTS, Segmenter, describe, free_device_memory,
                           load_image)
 
@@ -31,9 +31,9 @@ DEFAULT_DETAIL = 0.5
 # command-line options that change the output image (others, like --svg, don't)
 OUTPUT_OPTIONS = ("color", "size", "dpi", "pad", "min_speck", "outline", "antialias",
                   "work_size", "min_conf", "detector", "segmenter", "subject",
-                  "anim_size", "fps", "max_frames")
+                  "anim_size", "fps", "max_frames", "steady")
 STILL_ONLY = ("size", "dpi", "pad", "work_size")
-ANIMATION_ONLY = ("anim_size", "fps", "max_frames")
+ANIMATION_ONLY = ("anim_size", "fps", "max_frames", "steady")
 
 # short names used in output file names (README has the same table)
 ABBREV = {
@@ -53,6 +53,7 @@ ABBREV = {
     "color": "col", "size": "px", "dpi": "dpi", "pad": "pad", "min_speck": "spk",
     "outline": "ol", "antialias": "aa", "work_size": "ws", "min_conf": "mc",
     "detector": "det", "segmenter": "seg", "anim_size": "as", "fps": "fps", "max_frames": "mf",
+    "steady": "sty",
     # refine pass (only in refined files' names)
     "refine": "rf", "refine_seed": "rsd", "refine_quantize": "rq", "refine_prompt": "rp",
     "refine_model": "rmd",
@@ -175,6 +176,10 @@ def parse_args(argv=None):
                         "(0 = every frame) (default: 12)")
     g.add_argument("--max-frames", type=int, default=0,
                    help="draw only the first N frames (after --fps) (default: 0 = all)")
+    g.add_argument("--steady", type=float, default=0.5,
+                   help="a subject detected in more than this fraction of the frames is drawn "
+                        "in every frame, cut out again where detection missed it, so it doesn't "
+                        "blink in and out (1 = off, every frame on its own) (default: 0.5)")
 
     g = ap.add_argument_group("refine (optional final pass through an image-editing model)")
     g.add_argument("--refine", choices=refine.MODES, default="off",
@@ -350,14 +355,36 @@ def draw_animation(args, path: Path, seg, names, ids, overrides, previews: list)
              1000 * len(frames) / max(sum(durations), 1))
 
     inks = {name: [] for name in names}
-    found = 0
     rora_log = logging.getLogger("rora")
     level = rora_log.level
-    rora_log.setLevel(logging.WARNING)  # the drawing steps' log lines would repeat every frame
+    rora_log.setLevel(logging.WARNING)  # the per-frame steps' log lines would repeat every frame
     try:
+        found = []
         for i, rgb in enumerate(frames, 1):
             t = time.perf_counter()
-            subjects = seg.find_subjects(rgb, args.subject, args.subject_conf)
+            found.append(seg.find_subjects(rgb, args.subject, args.subject_conf))
+            log.info("  frame %d/%d: %s (%.1fs)", i, len(frames),
+                     describe([s.kind for s in found[-1]]) if found[-1] else "nothing found",
+                     time.perf_counter() - t)
+            free_device_memory()
+        if not any(found):
+            log.warning("  no %s found in any frame, skipping", args.subject
+                        if args.subject in COCO_KINDS.values() else "person, cat or dog")
+            return 0
+
+        if args.steady < 1:
+            t = time.perf_counter()
+            found, filled = track.steady(found, lambda i, boxes: seg.segment(frames[i], boxes),
+                                         args.steady)
+            for label, at in filled.items():
+                log.info("  kept the %s in %d more frame(s): %s", label, len(at),
+                         ", ".join(str(i + 1) for i in at))
+            if filled:
+                log.info("  steadied in %.1fs", time.perf_counter() - t)
+            free_device_memory()
+
+        for i, (rgb, subjects) in enumerate(zip(frames, found), 1):
+            t = time.perf_counter()
             mask = np.zeros((h, w), bool)
             frame = {name: np.zeros((h, w), bool) for name in names}
             for s in subjects:
@@ -370,18 +397,10 @@ def draw_animation(args, path: Path, seg, names, ids, overrides, previews: list)
                 if args.outline:
                     ink |= styles.silhouette(mask, args.outline)
                 inks[name].append(export.despeckle(ink, args.min_speck))
-            found += bool(subjects)
-            log.info("  frame %d/%d: %s (%.1fs)", i, len(frames),
-                     describe([s.kind for s in subjects]) if subjects else "nothing found",
-                     time.perf_counter() - t)
+            log.info("  drew frame %d/%d (%.1fs)", i, len(frames), time.perf_counter() - t)
             free_device_memory()
     finally:
         rora_log.setLevel(level)
-    if not found:
-        log.warning("  no %s found in any frame, skipping", args.subject
-                    if args.subject in COCO_KINDS.values() else "person, cat or dog")
-        return 0
-
     suffix = path.suffix.lower()
     sub_tag = "" if args.subject == "all" else f"_{args.subject}"
     for name in names:
