@@ -100,9 +100,8 @@ def save(inks: list[np.ndarray], path: Path, color: str,
                 return ", ".join(notes)
         if not durations or len(images) < 2:
             break
-        # still too big: drop every other frame, showing the kept ones twice as long
-        images = images[::2]
-        durations = [sum(durations[i:i + 2]) for i in range(0, len(durations), 2)]
+        # still too big: drop every other frame, keeping the input's frame rate (so it's shorter)
+        images, durations = images[::2], durations[::2]
     path.write_bytes(smallest)
     notes.append(f"{len(smallest) // 1000} KB is over WhatsApp's {limit // 1000} KB limit")
     return ", ".join(notes)

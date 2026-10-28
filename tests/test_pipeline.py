@@ -124,17 +124,29 @@ class PipelineTestCase(unittest.TestCase):
         with Image.open(gifs[0]) as im:
             self.assertEqual(im.n_frames, frames)
             self.assertEqual(max(im.size), ANIM_SIZE)
-            self.assertIn("transparency", im.info)
+            opaque = "--opaque-background" in opts
+            self.assertEqual("transparency" in im.info, not opaque)
             self.assertEqual(json.loads(im.info["comment"])["style"], style)
-            inked = 0
+            bg = np.array(export.BACKGROUNDS[color], np.int16)
+            inked = haloed = 0
             for i in range(im.n_frames):
                 im.seek(i)
-                inked += bool((np.asarray(im.convert("RGBA"))[..., 3] > 0).any())
+                rgba = np.asarray(im.convert("RGBA"))
+                if opaque:
+                    self.assertTrue((rgba[..., 3] == 255).all())
+                    inked += bool((np.abs(rgba[..., :3] - bg).max(axis=2) > 100).any())
+                else:
+                    inked += bool((rgba[..., 3] > 0).any())
+                    haloed += bool(((rgba[..., 3] > 0) & (rgba[..., :3] == bg).all(axis=2)).any())
+            if not opaque:
+                self.assertEqual(haloed > 0, "--halo" in opts)
         self.assertGreater(inked, 0, f"{gifs[0].name} has no ink in any frame")
-        files = gifs
-        if ext != ".gif":
-            files = sorted(out.glob(f"*__{style}_*{ext}"))
-            self.assertEqual(len(files), 1, f"expected one {style} {ext} in {out}")
+        video_exts = {ext, ".mp4"} if "--mp4" in opts else {ext}
+        if ".mp4" not in video_exts:
+            self.assertEqual(sorted(out.glob(f"*__{style}_*.mp4")), [])
+        for vext in sorted(video_exts - {".gif"}):
+            files = sorted(out.glob(f"*__{style}_*{vext}"))
+            self.assertEqual(len(files), 1, f"expected one {style} {vext} in {out}")
             cap = cv2.VideoCapture(str(files[0]))
             size = (cap.get(cv2.CAP_PROP_FRAME_WIDTH), cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
             self.assertEqual(max(size), ANIM_SIZE)
@@ -148,9 +160,9 @@ class PipelineTestCase(unittest.TestCase):
                 inked += bool((np.abs(bgr.astype(np.int16) - bg).max(axis=2) > 100).any())
             cap.release()
             self.assertEqual(n, frames)
-        self.assertGreater(inked, 0, f"{files[0].name} has no ink in any frame")
+            self.assertGreater(inked, 0, f"{files[0].name} has no ink in any frame")
         stickers = sorted(out.glob(f"*__{style}_*.webp"))
-        if "--no-sticker" in opts:
+        if "--sticker" not in opts:
             self.assertEqual(stickers, [])
         else:
             self.assertEqual(len(stickers), 1, f"expected one {style} .webp sticker in {out}")
@@ -186,14 +198,16 @@ class StyleTests(PipelineTestCase):
 
     def test_engraving(self):
         # 100 ms frames at 5 fps: every other frame is kept
-        self.check_clip("engraving", ".gif", "--fps", "5", "--max-frames", "3", frames=3)
+        self.check_clip("engraving", ".gif", "--fps", "5", "--max-frames", "3", "--halo", "--mp4",
+                        frames=3)
 
     # cartoony styles
     def test_cartoon(self):
-        self.check_clip("cartoon", ".mp4", "--color", "black", "--antialias")
+        self.check_clip("cartoon", ".mp4", "--color", "black", "--antialias", "--sticker")
 
     def test_comic(self):
-        self.check_clip("comic", ".mov", "--subject", "dog", "--fps", "0")
+        self.check_clip("comic", ".mov", "--subject", "dog", "--fps", "0", "--opaque-background",
+                        "--mp4")
 
     # dramatic styles
     def test_woodcut(self):

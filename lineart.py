@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Photo of a dog, cat or person -> transparent PNG line art (for printing on shirts).
 GIFs and videos (MP4, MOV) are drawn frame by frame into a GIF (and, for videos, a video in the
-input's format) of the line art, plus an animated WhatsApp sticker (.webp)."""
+input's format) of the line art."""
 import argparse
 import hashlib
 import json
@@ -32,9 +32,9 @@ DEFAULT_DETAIL = 0.5
 # command-line options that change the output image (others, like --svg, don't)
 OUTPUT_OPTIONS = ("color", "size", "dpi", "pad", "min_speck", "outline", "antialias",
                   "work_size", "min_conf", "detector", "segmenter", "subject",
-                  "anim_size", "fps", "max_frames", "steady")
+                  "anim_size", "fps", "max_frames", "steady", "halo", "opaque_background")
 STILL_ONLY = ("size", "dpi", "pad", "work_size")
-ANIMATION_ONLY = ("anim_size", "fps", "max_frames", "steady")
+ANIMATION_ONLY = ("anim_size", "fps", "max_frames", "steady", "halo", "opaque_background")
 
 # short names used in output file names (README has the same table)
 ABBREV = {
@@ -54,7 +54,7 @@ ABBREV = {
     "color": "col", "size": "px", "dpi": "dpi", "pad": "pad", "min_speck": "spk",
     "outline": "ol", "antialias": "aa", "work_size": "ws", "min_conf": "mc",
     "detector": "det", "segmenter": "seg", "anim_size": "as", "fps": "fps", "max_frames": "mf",
-    "steady": "sty",
+    "steady": "sty", "halo": "hl", "opaque_background": "obg",
     # refine pass (only in refined files' names)
     "refine": "rf", "refine_seed": "rsd", "refine_quantize": "rq", "refine_prompt": "rp",
     "refine_model": "rmd",
@@ -147,9 +147,9 @@ def parse_args(argv=None):
     g.add_argument("--outline", type=int, default=0, help="add a silhouette outline this wide (px)")
     g.add_argument("--antialias", action="store_true", help="soft edges (hard by default)")
     g.add_argument("--svg", action="store_true", help="also write traced .svg files")
-    g.add_argument("--sticker", action=argparse.BooleanOptionalAction, default=None,
+    g.add_argument("--sticker", action=argparse.BooleanOptionalAction, default=False,
                    help="also write a WhatsApp sticker (.webp, 512x512, animated for GIFs and "
-                        "videos) (default: on for GIFs and videos, off for photos)")
+                        "videos) (default: off)")
     g.add_argument("--preview", action=argparse.BooleanOptionalAction, default=True,
                    help="write _preview.png contact sheet (default: on)")
     g.add_argument("--debug", action="store_true", help="save mask and cut-out per photo")
@@ -171,8 +171,8 @@ def parse_args(argv=None):
     g.add_argument("--segmenter", default="sam2.1_b.pt")
 
     g = ap.add_argument_group("animation (GIF, MP4 and MOV inputs; drawn on the whole frame, "
-                              "written in the input's format, plus a transparent GIF for videos "
-                              "and a WhatsApp sticker; no --refine, --svg or --debug)")
+                              "written in the input's format, plus a transparent GIF for videos; "
+                              "no --refine, --svg or --debug)")
     g.add_argument("--anim-size", type=int, default=720,
                    help="long side in px, for processing and output (instead of --work-size "
                         "and --size) (default: 720)")
@@ -185,6 +185,16 @@ def parse_args(argv=None):
                    help="a subject detected in more than this fraction of the frames is drawn "
                         "in every frame, cut out again where detection missed it, so it doesn't "
                         "blink in and out (1 = off, every frame on its own) (default: 0.5)")
+    g.add_argument("--halo", action="store_true",
+                   help="outline the GIF's lines in the dark (or, with --color black, light) "
+                        "background colour, so they show where transparency turns white, as "
+                        "on WhatsApp")
+    g.add_argument("--opaque-background", action="store_true",
+                   help="draw the GIF on that background instead of transparent (and with "
+                        "--antialias, with soft edges)")
+    g.add_argument("--mp4", action="store_true",
+                   help="also write an MP4 (on the background) for GIF and MOV inputs; MP4 "
+                        "inputs always get one")
 
     g = ap.add_argument_group("refine (optional final pass through an image-editing model)")
     g.add_argument("--refine", choices=refine.MODES, default="off",
@@ -354,8 +364,8 @@ def draw_subjects(args, photo: str, rgb, subjects, names, ids, overrides, refine
 
 def draw_animation(args, path: Path, seg, names, ids, overrides, previews: list) -> int:
     """Draw a GIF or video frame by frame on its whole frame, one animation per style in the
-    input's format plus a transparent GIF for videos and (unless --no-sticker) an animated
-    WhatsApp sticker; returns files written (0 if no subject was found in any frame)."""
+    input's format plus a GIF for videos and (with --sticker) an animated WhatsApp sticker;
+    returns files written (0 if no subject was found in any frame)."""
     frames, durations = video.read_frames(path, args.anim_size, args.fps, args.max_frames)
     if not frames:
         raise ValueError("no frames")
@@ -417,13 +427,15 @@ def draw_animation(args, path: Path, seg, names, ids, overrides, previews: list)
         tag, settings = ids[name]
         stem = f"{path.stem}{sub_tag}__{tag}"
         gif = args.out / f"{stem}.gif"
-        video.save_gif(inks[name], gif, args.color, durations, settings)
+        video.save_gif(inks[name], gif, args.color, durations, settings, args.halo,
+                       args.opaque_background, args.antialias)
         outs = [gif]
-        if suffix != ".gif":
-            outs.insert(0, args.out / f"{stem}{suffix}")
+        exts = {suffix, ".mp4"} if args.mp4 else {suffix}
+        for ext in sorted(exts - {".gif"}):
+            outs.insert(0, args.out / f"{stem}{ext}")
             video.save_video(inks[name], outs[0], args.color, durations, args.antialias)
         note = ""
-        if args.sticker is not False:
+        if args.sticker:
             outs.append(args.out / f"{stem}.webp")
             note = sticker.save(inks[name], outs[-1], args.color, durations)
         written += len(outs)
@@ -511,8 +523,9 @@ def main(argv=None) -> int:
     anims = [f for f in files if video.is_animation(f)]
     if anims:
         for n, (tag, text) in anim_ids.items():
-            log.info("  %s -> <clip>__%s.gif (+ .mp4|.mov for videos%s)  %s", n, tag,
-                     "" if args.sticker is False else ", .webp sticker", text)
+            log.info("  %s -> <clip>__%s.gif (+ .mp4|.mov for videos%s%s)  %s", n, tag,
+                     ", .mp4" if args.mp4 else "",
+                     ", .webp sticker" if args.sticker else "", text)
         if args.refine != "off" or args.svg or args.debug:
             log.warning("  --refine, --svg and --debug are skipped for GIFs and videos")
     used_keys = {k for n in names for k in styles.STYLES[n].defaults} | {"invert"}

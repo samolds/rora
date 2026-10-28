@@ -84,8 +84,8 @@ The full settings are also embedded in each PNG (text field `dog_lineart_setting
 | `rm` | rim | `dk` | darkness | `fps` | --fps |
 | `la` | light_angle | `or` | outline_ratio | `mf` | --max-frames |
 | `gr` | grain | `tp` | taper | `sty` | --steady |
-| | | `ps` | passes | | |
-| | | `wb` | wobble | | |
+| | | `ps` | passes | `hl` | --halo |
+| | | `wb` | wobble | `obg` | --opaque-background |
 | | | `gp` | gaps | | |
 | | | `gs` | gap_size | | |
 
@@ -142,11 +142,21 @@ Run `python lineart.py --help` for the full list.
 GIF, MP4 and MOV inputs (files, or in a folder alongside photos) are drawn frame by frame and
 written back in the same format, one per style: `clip.gif` -> `clip__edges_d0.5_w2.gif`.
 Videos also get a transparent GIF: `clip.mp4` -> `clip__edges_d0.5_w2.mp4` and `.gif`.
-Every clip also gets an animated WhatsApp sticker, `clip__edges_d0.5_w2.webp` (see
-[WhatsApp stickers](#whatsapp-stickers); `--no-sticker` skips it).
+`--sticker` adds an animated WhatsApp sticker, `clip__edges_d0.5_w2.webp` (see
+[WhatsApp stickers](#whatsapp-stickers)), and `--mp4` an MP4 for GIF and MOV inputs.
 Each frame is drawn on the whole frame (no cropping to the subject), so nothing jumps around.
 GIFs are transparent with hard edges; MP4 and MOV have no transparency, so the lines are drawn
 on the same dark (or, with `--color black`, light) background as the preview.
+
+`--halo` outlines the lines, a few px wide, in that same background colour, so they show on
+white as well as dark wherever transparency turns white, as when a GIF is sent on WhatsApp
+(the GIF stays transparent; the name gets `_hl`). `--opaque-background` instead draws the GIF
+on that background (soft edges with `--antialias`; the name gets `_obg`).
+
+WhatsApp Web (in the browser) turns uploaded GIF files into a still image; it only animates
+GIFs from its own GIF search. To send a clip from there, send the MP4 (`--mp4` for GIF
+inputs), or make a `--sticker` and add it with the emoji button -> Stickers -> Create,
+picking the `.webp`.
 
 ```sh
 python lineart.py img/in/clip.mp4 -s ink edges
@@ -175,15 +185,15 @@ python lineart.py img/in/clip.gif -s fineline --fps 8 --max-frames 40
 ### WhatsApp stickers
 
 `--sticker` also writes each drawing as a WhatsApp sticker: a 512x512 transparent `.webp`
-next to the PNG. It's on by default for GIFs and videos (animated) and off for photos;
-`--no-sticker` turns it off for clips too.
+next to the PNG (animated for GIFs and videos). It's off by default.
 
 - The lines are cropped to where they are drawn (across all frames for a clip, so it doesn't
   jump), fitted inside a 16 px margin, and get a thin halo in the background colour so white
   ink still shows on a light chat background (and black ink on a dark one).
 - WhatsApp only takes stickers up to 100 KB (500 KB animated) and 10 s. Longer clips are
   trimmed to 10 s; if a file is too big it's saved lossy, then (for clips) with every other
-  frame dropped. The log says when either happened, or if it still doesn't fit.
+  frame dropped, playing at the input's frame rate (so the sticker is shorter than the clip).
+  The log says when either happened, or if it still doesn't fit.
 - To send one, share the `.webp` to WhatsApp (e.g. from Files on a phone), or add it to a
   sticker pack with a sticker-maker app.
 

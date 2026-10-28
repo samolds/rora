@@ -97,7 +97,7 @@ class StickerTests(unittest.TestCase):
         self.assertLessEqual(path.stat().st_size, sticker.MAX_ANIM_BYTES)
         kept = durations(path)
         self.assertLess(len(kept), 12)
-        self.assertEqual(sum(kept), 1200)  # dropped frames' time goes to the kept ones
+        self.assertEqual(kept, [100] * len(kept))  # input frame rate, so a shorter clip
 
 
 if __name__ == "__main__":

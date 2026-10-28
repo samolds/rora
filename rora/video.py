@@ -63,16 +63,33 @@ def read_frames(path: Path, size: int, fps: float = 0,
 
 
 def save_gif(inks: list[np.ndarray], path: Path, color: str, durations: list[int],
-             settings: str | None = None):
-    """Transparent GIF; the edges are hard since GIF transparency is on/off."""
-    palette = [*BACKGROUNDS[color], *COLORS[color]]  # index 0 (transparent), index 1 (ink)
+             settings: str | None = None, halo: bool = False, opaque: bool = False,
+             antialias: bool = False):
+    """Transparent GIF with hard edges (GIF transparency is on/off); `halo` outlines the lines
+    in the background colour so they show on any background, `opaque` draws them on it."""
+    if opaque:
+        # 256-step ramp from background to ink, indexed by the (antialiased) ink alpha
+        ramp = np.linspace(BACKGROUNDS[color], COLORS[color], 256).round().astype(np.uint8)
+        palette = ramp.ravel().tolist()
+        indices = [np.ascontiguousarray(np.asarray(to_rgba(ink, color, antialias))[..., 3])
+                   for ink in inks]
+    else:
+        # index 0 transparent, 1 ink, 2 halo
+        palette = [*BACKGROUNDS[color], *COLORS[color], *BACKGROUNDS[color]]
+        indices = [ink.astype(np.uint8) for ink in inks]
+        if halo:
+            r = max(2, round(max(inks[0].shape) / 240))  # 3 px at the default 720 px
+            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1))
+            for idx in indices:
+                idx[(cv2.dilate(idx, kernel) > 0) & (idx == 0)] = 2
     frames = []
-    for ink in inks:
-        im = Image.fromarray(ink.astype(np.uint8), "P")
+    for idx in indices:
+        im = Image.fromarray(idx, "P")
         im.putpalette(palette)
         frames.append(im)
+    extra = {} if opaque else dict(transparency=0, disposal=2)
     frames[0].save(path, save_all=True, append_images=frames[1:], duration=durations, loop=0,
-                   transparency=0, disposal=2, optimize=False, comment=settings or "")
+                   optimize=False, comment=settings or "", **extra)
 
 
 def save_video(inks: list[np.ndarray], path: Path, color: str, durations: list[int],
