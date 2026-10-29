@@ -20,7 +20,7 @@ PY="${PYTHON:-$(command -v python3.12 || command -v python3)}"
 [ -d env ] || "$PY" -m venv env
 env/bin/pip install --upgrade pip
 env/bin/pip install -r requirements.txt
-mkdir -p img/in img/out
+mkdir -p img/local/in
 
 echo "Downloading model weights into ./models (about 1.2 GB, first time only)..."
 HF_HUB_OFFLINE=0 YOLO_OFFLINE=0 env/bin/python -W ignore - <<'PY'
@@ -51,8 +51,8 @@ PY
 fi
 
 echo
-echo "Done. Put photos in img/in/ and run:"
-echo "  env/bin/python lineart.py --style tattoo --preview"
+echo "Done. Put your photos in img/local/in/ (not in git) and run:"
+echo "  env/bin/python lineart.py img/local/in --style tattoo --preview"
 if [ -z "$REFINE" ]; then
   echo
   echo "Optional: run ./setup.sh --refine to enable the --refine pass (downloads about 16 GB)."

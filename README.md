@@ -10,27 +10,28 @@ the main one (the biggest, most central), and `--subject dog` (or `cat`, `person
 one of that kind in its own image. GIFs and videos (MP4, MOV) work too, frame by frame (see
 [GIFs and videos](#gifs-and-videos)).
 
-## Sam's Favorite Runs
+## Example
 
-```
-env/bin/python lineart.py img/in -s edges ink noir outline sketch stencil stipple --detail 1 --no-preview --subject dog --refine stylize --sample 1
-env/bin/python lineart.py img/peevin -s edges ink noir outline sketch stencil stipple --detail 1 --no-preview --subject all --refine stylize --sample 1
-```
+<table align="center">
+  <tr>
+    <td><img src="img/in/clip_preview.gif" alt="Two dogs playing in the snow" width="300"></td>
+    <td align="center"><b>&rarr;</b></td>
+    <td><img src="img/out/clip__edges_d0.5_w2_obg.gif" alt="The same clip drawn as white edge lines on a dark background" width="300"></td>
+  </tr>
+</table>
 
-```
-env/bin/python lineart.py img/in -s edges ink noir outline sketch stencil stipple --detail 1 --no-preview --refine stylize --refine-prompt "alter style to character from epic star wars concept art" --sample 1
-```
+[`img/in/clip.mp4`](img/in/clip.mp4) -> [`img/out/clip__edges_d0.5_w2_obg.gif`](img/out/clip__edges_d0.5_w2_obg.gif)
+(also in [stencil](img/out/clip__stencil_d0.5_w2_obg.gif) and
+[stipple](img/out/clip__stipple_d0.5_w2_obg.gif); the input shown is `clip.mp4` as a GIF,
+[`img/in/clip_preview.gif`](img/in/clip_preview.gif), since GitHub doesn't play videos here),
+and for a photo,
+[`img/in/1.jpg`](img/in/1.jpg) -> [`img/out/1_dog__stencil_d0.5_w2.png`](img/out/1_dog__stencil_d0.5_w2.png)
+(white on transparent, so it's blank on a light page):
 
+```sh
+env/bin/python lineart.py img/in/clip.mp4 -s edges stencil stipple --opaque-background --detail 0.5 -o img/out
+env/bin/python lineart.py img/in/1.jpg -s stencil --subject dog --detail 0.5 -o img/out
 ```
-env/bin/python lineart.py img/in -s edges ink noir outline sketch stencil stipple --detail 1 --no-preview --subject dog --invert --color black --sample 1
-```
-
-```
-for d in 0.1 0.3 0.5 0.8 1; do
-  env/bin/python lineart.py img/in -s edges ink noir outline sketch stencil stipple --detail $d --no-preview --sample 1
-done
-```
-
 
 ## Getting started
 
@@ -42,8 +43,9 @@ Works on macOS (Apple GPU), Linux/Windows (CUDA GPU) or plain CPU.
 env/bin/python lineart.py img/in/1.jpg --style tattoo --preview     # try the included demo photo
 ```
 
-Then add your own photos to `img/in/` and run `env/bin/python lineart.py --preview`.
-Results go to `img/out/`, including `_preview.png` (every result on a dark background) and `run.log`.
+Then put your own photos in `img/local/in/` (`img/local/` is git-ignored) and run
+`env/bin/python lineart.py img/local/in --preview`. Results go to `out/` (git-ignored; `-o` to
+change), with `run.log` and, with `--preview`, `_preview.png` (every result on a dark background).
 
 After `setup.sh` (and `./setup.sh --refine` for `--refine`), runs work fully offline and make no
 network calls: once the weights are in `models/`, the Hugging Face libraries and Ultralytics are
@@ -55,7 +57,7 @@ Output files are named `<photo>__<style>_d<detail>_w<weight>[_<other settings>].
 `1__edges_d0.4_w1.png`. With `--subject auto` or a kind, the subject is added after the photo
 name: `1_dog__edges_d0.4_w1.png`, or `1_dog1__...`, `1_dog2__...` when there are several.
 Besides detail and weight, only settings that differ from a normal
-run's defaults are added, in short form (e.g. `1__fineline_d0.5_w3_f0.7` for `--set freedom=0.7`).
+run's defaults are added, in short form (e.g. `1__fineline_d1_w3_f0.7` for `--set freedom=0.7`).
 Re-running with the same settings overwrites the same file; different settings make a new one.
 The full settings are also embedded in each PNG (text field `dog_lineart_settings`) and SVG
 (`<desc>`), and listed in `run.log`.
@@ -86,7 +88,7 @@ The full settings are also embedded in each PNG (text field `dog_lineart_setting
 | `gr` | grain | `tp` | taper | `sty` | --steady |
 | | | `ps` | passes | `hl` | --halo |
 | | | `wb` | wobble | `obg` | --opaque-background |
-| | | `gp` | gaps | | |
+| | | `gp` | gaps | `sq` | --square |
 | | | `gs` | gap_size | | |
 
 On/off settings appear as just the short name when on (e.g. `aa`), or with `0` when off.
@@ -98,6 +100,27 @@ Each image is cropped to its drawn lines with an even transparent margin (`--pad
 Everything (virtual env, model weights, caches) stays inside this folder, except the optional
 `--refine` model, which goes in the shared Hugging Face cache (see below).
 To uninstall, delete the folder.
+
+## Sam's Favorite Runs
+
+```
+env/bin/python lineart.py img/local/in -s edges ink noir outline sketch stencil stipple --detail 1 --subject dog --refine stylize --sample 1
+env/bin/python lineart.py img/local/peevin -s edges ink noir outline sketch stencil stipple --detail 1 --subject all --refine stylize --sample 1
+```
+
+```
+env/bin/python lineart.py img/local/in -s edges ink noir outline sketch stencil stipple --detail 1 --refine stylize --refine-prompt "alter style to character from epic star wars concept art" --sample 1
+```
+
+```
+env/bin/python lineart.py img/local/in -s edges ink noir outline sketch stencil stipple --detail 1 --subject dog --invert --color black --sample 1
+```
+
+```
+for d in 0.1 0.3 0.5 0.8 1; do
+  env/bin/python lineart.py img/local/in -s edges ink noir outline sketch stencil stipple --detail $d --sample 1
+done
+```
 
 ## Usage
 
@@ -111,10 +134,10 @@ python lineart.py img/in/1.jpg --style fineline
 python lineart.py img/in/1.jpg -s fineline brush dotwork --preview
 
 # every photo in a folder, every tattoo style, plus SVG
-python lineart.py img/in -s tattoo --svg --preview
+python lineart.py img/local/in -s tattoo --svg --preview
 
 # 5 photos picked at random from a folder (the seed is logged; --sample-seed repeats a pick)
-python lineart.py img/in --sample 5 -s fineline
+python lineart.py img/local/in --sample 5 -s fineline
 
 # fewer / more lines, cleaner / more literal lines
 python lineart.py img/in/1.jpg -s fineline --detail 0      # just outline + face
@@ -128,10 +151,10 @@ python lineart.py img/in/1.jpg -s bold --color black
 python lineart.py --list-styles
 ```
 
-Useful options: `--detail 0..1` (how much is drawn), `--weight N` (line width),
+Useful options: `--detail 0..1` (how much is drawn, default 1; `ink` 0.5), `--weight N` (line width),
 `--set key=value` (any style setting), `--size` / `--dpi` (print size, default
 3600 px at 300 DPI = 12"), `--svg`, `--sticker` (WhatsApp sticker, see
-[WhatsApp stickers](#whatsapp-stickers)), `--no-preview`, `--debug` (saves each subject's cut-out),
+[WhatsApp stickers](#whatsapp-stickers)), `--preview` (`_preview.png` contact sheet), `--debug` (saves each subject's cut-out),
 `--subject all|auto|dog|cat|person` (default `all`: every person, cat and dog detected with at
 least `--subject-conf` 0.8 confidence, plus the main one, together in one image; `auto`: only
 the main subject; a kind: each one of that kind, in its own image).
@@ -140,11 +163,12 @@ Run `python lineart.py --help` for the full list.
 ### GIFs and videos
 
 GIF, MP4 and MOV inputs (files, or in a folder alongside photos) are drawn frame by frame and
-written back in the same format, one per style: `clip.gif` -> `clip__edges_d0.5_w2.gif`.
-Videos also get a transparent GIF: `clip.mp4` -> `clip__edges_d0.5_w2.mp4` and `.gif`.
-`--sticker` adds an animated WhatsApp sticker, `clip__edges_d0.5_w2.webp` (see
+written back in the same format, one per style: `clip.gif` -> `clip__edges_d1_w2.gif`.
+Videos also get a transparent GIF: `clip.mp4` -> `clip__edges_d1_w2.mp4` and `.gif`.
+`--sticker` adds an animated WhatsApp sticker, `clip__edges_d1_w2.webp` (see
 [WhatsApp stickers](#whatsapp-stickers)), and `--mp4` an MP4 for GIF and MOV inputs.
-Each frame is drawn on the whole frame (no cropping to the subject), so nothing jumps around.
+Each frame is drawn on the whole frame (no cropping to the subject), so nothing jumps around
+(unless `--square`, below).
 GIFs are transparent with hard edges; MP4 and MOV have no transparency, so the lines are drawn
 on the same dark (or, with `--color black`, light) background as the preview.
 
@@ -160,11 +184,17 @@ picking the `.webp`.
 
 ```sh
 python lineart.py img/in/clip.mp4 -s ink edges
-python lineart.py img/in/clip.gif -s fineline --fps 8 --max-frames 40
+python lineart.py img/local/in/clip.gif -s fineline --fps 8 --max-frames 40
 ```
 
-- `--anim-size` (default 720): long side in px; frames are processed and written at this
-  size (`--work-size`, `--size`, `--pad` and `--dpi` are for photos only).
+- `--anim-size` (default 720): long side in px (with `--square`, the square's side); frames
+  are processed and written at this size (`--work-size`, `--size`, `--pad` and `--dpi` are
+  for photos only).
+- `--square`: crop the clip to a square as wide as its short side, which slides along the
+  long side to keep the subjects' faces in frame: the middle of their eyes and nose (found
+  with OWLv2, as for the tattoo looks), or of the head when those aren't found, filled in
+  where no subject is found and smoothed over about a third of a second so it glides with
+  the camera. Finding the faces takes about a second per frame. The name gets `_sq`.
 - `--fps` (default 12): at most this many frames per second; the rest are dropped and the
   kept ones shown longer, so the clip keeps its length. `--fps 0` draws every frame.
 - `--max-frames N`: only the first N frames (after `--fps`), handy for trying settings.
@@ -197,15 +227,17 @@ next to the PNG (animated for GIFs and videos). It's off by default.
 - To send one, share the `.webp` to WhatsApp (e.g. from Files on a phone), or add it to a
   sticker pack with a sticker-maker app.
 
-With no options, `python lineart.py` runs every photo in `img/in/` with:
+Given only photos, clips or folders, `python lineart.py` draws them with:
 
 ```sh
--s edges --detail 0.5 --preview \
+-s edges --detail 1 -o out --no-preview \
   --set max_strokes=50 --set head_strokes=100 --set form_lines=100 \
   --set min_votes=2.5 --set coverage=0.1 --set min_score=0 --set freedom=0.4
 ```
 
-The `--set` defaults tune the tattoo looks; any `--set` you pass overrides them.
+(`ink` gets `--detail 0.5` instead: at higher detail its lines vanish on small images such as
+720 px clip frames.) The `--set` defaults tune the tattoo looks; any `--set` you pass overrides
+them.
 Add `--style-defaults` to drop these command-line defaults and use each style's own
 defaults instead (listed below and by `--list-styles`).
 
@@ -219,7 +251,7 @@ Every photo with `edges`, across a grid of detail and line weight (12 combinatio
 ```sh
 for d in 0.2 0.4 0.6 0.8; do
   for w in 1 2 3; do
-    env/bin/python lineart.py img/in -o out -s edges --detail $d --weight $w --no-preview
+    env/bin/python lineart.py img/local/in -s edges --detail $d --weight $w
   done
 done
 ```
@@ -227,11 +259,10 @@ done
 Every photo in every style, each with that style's own defaults:
 
 ```sh
-env/bin/python lineart.py img/in -o out -s all --style-defaults
+env/bin/python lineart.py img/local/in -s all --style-defaults
 ```
 
 Each takes roughly 20–25 minutes for about 50 photos on an Apple M-series Mac.
-`--no-preview` keeps each run in the loop from overwriting the same `_preview.png`.
 
 ## Tests
 
@@ -251,7 +282,7 @@ RORA_KEEP_TEST_OUTPUT=1 env/bin/python -m unittest -v                   # keep t
 (by default [FLUX.2 [klein] 4B](https://huggingface.co/black-forest-labs/FLUX.2-klein-4B),
 Apache-2.0), inside this script, to clean it up or restyle it so it clearly reads as its subject
 (dog, cat or person). The original is always written; the refined version is written next to it
-with `_rf-<mode>` added to the name (e.g. `1__edges_d0.5_w2_rf-clean.png`).
+with `_rf-<mode>` added to the name (e.g. `1__edges_d1_w2_rf-clean.png`).
 
 | Mode | What it does |
 |---|---|
@@ -509,4 +540,6 @@ Specific to each look:
 | `rora/env.py` | keeps model downloads and settings in `./models` |
 | `setup.sh` | one-time setup |
 
-Not in git (recreated by `setup.sh` or at run time): `env/`, `models/`, `img/out/`, `out/`, `lab/`.
+Not in git (recreated by `setup.sh` or at run time): `env/`, `models/`, `out/`, `lab/`, and
+`img/local/` (your own photos and results; `img/in/` and `img/out/` only hold the
+[example](#example)).

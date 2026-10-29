@@ -16,7 +16,7 @@ from rora import env  # noqa: F401  (must come before torch/ultralytics imports)
 import cv2
 import numpy as np
 
-from rora import export, refine, sticker, styles, tattoo, track, video
+from rora import export, refine, square, sticker, styles, tattoo, track, video
 from rora.segment import (COCO_KINDS, SUBJECTS, Segmenter, describe, free_device_memory,
                           load_image)
 
@@ -27,14 +27,18 @@ IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".heic", ".webp", ".tif", ".tiff"}
 # They tune the tattoo looks (fineline, brush, ...) and are ignored by styles that don't use them.
 DEFAULT_SETTINGS = {"max_strokes": 50, "head_strokes": 100, "form_lines": 100,
                     "min_votes": 2.5, "coverage": 0.1, "min_score": 0, "freedom": 0.4}
-DEFAULT_DETAIL = 0.5
+DEFAULT_DETAIL = 1.0
+# ink's lines vanish at high detail on small (e.g. 720 px clip) frames
+STYLE_DETAIL = {"ink": 0.5}
 
 # command-line options that change the output image (others, like --svg, don't)
 OUTPUT_OPTIONS = ("color", "size", "dpi", "pad", "min_speck", "outline", "antialias",
                   "work_size", "min_conf", "detector", "segmenter", "subject",
-                  "anim_size", "fps", "max_frames", "steady", "halo", "opaque_background")
+                  "anim_size", "fps", "max_frames", "steady", "halo", "opaque_background",
+                  "square")
 STILL_ONLY = ("size", "dpi", "pad", "work_size")
-ANIMATION_ONLY = ("anim_size", "fps", "max_frames", "steady", "halo", "opaque_background")
+ANIMATION_ONLY = ("anim_size", "fps", "max_frames", "steady", "halo", "opaque_background",
+                  "square")
 
 # short names used in output file names (README has the same table)
 ABBREV = {
@@ -54,7 +58,7 @@ ABBREV = {
     "color": "col", "size": "px", "dpi": "dpi", "pad": "pad", "min_speck": "spk",
     "outline": "ol", "antialias": "aa", "work_size": "ws", "min_conf": "mc",
     "detector": "det", "segmenter": "seg", "anim_size": "as", "fps": "fps", "max_frames": "mf",
-    "steady": "sty", "halo": "hl", "opaque_background": "obg",
+    "steady": "sty", "halo": "hl", "opaque_background": "obg", "square": "sq",
     # refine pass (only in refined files' names)
     "refine": "rf", "refine_seed": "rsd", "refine_quantize": "rq", "refine_prompt": "rp",
     "refine_model": "rmd",
@@ -76,7 +80,7 @@ def settings_id(name: str, overrides: dict, args, animated: bool = False) -> tup
 
     The settings part is the style, its detail and weight, then any other setting that
     differs from the normal run's defaults (the style's own, with DEFAULT_SETTINGS applied),
-    all in short form (ABBREV), e.g. `edges_d0.4_w1` or `fineline_d0.5_w3_f0.7`. Only
+    all in short form (ABBREV), e.g. `edges_d0.4_w1` or `fineline_d1_w3_f0.7`. Only
     settings the style uses count, so the same effective settings always give the same name.
     `animated`: for GIFs and videos, which use the animation options instead of the print ones.
     """
@@ -115,9 +119,9 @@ def refine_tag(mode: str, args) -> str:
 
 def parse_args(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("inputs", nargs="*", type=Path, default=[Path("img/in")],
-                    help="image, GIF or video (MP4, MOV) files, or folders (default: img/in)")
-    ap.add_argument("-o", "--out", type=Path, default=Path("img/out"))
+    ap.add_argument("inputs", nargs="*", type=Path,
+                    help="image, GIF or video (MP4, MOV) files, or folders")
+    ap.add_argument("-o", "--out", type=Path, default=Path("out"), help="(default: out)")
     ap.add_argument("--sample", type=positive_int, metavar="N",
                     help="run only N images picked at random from the inputs (the seed is logged)")
     ap.add_argument("--sample-seed", type=int, metavar="SEED",
@@ -127,14 +131,14 @@ def parse_args(argv=None):
     g = ap.add_argument_group("style")
     g.add_argument("-s", "--style", nargs="+", default=["edges"],
                    help="one or more style names, 'tattoo' (all tattoo looks) or 'all' (default: edges)")
-    g.add_argument("--detail", type=float, help="0 (simple) .. 1 (busy), default 0.5")
+    g.add_argument("--detail", type=float, help="0 (simple) .. 1 (busy), default 1 (ink: 0.5)")
     g.add_argument("--weight", type=int, help="line weight in px")
     g.add_argument("--set", action="append", default=[], metavar="KEY=VALUE",
                    help="override any style setting, e.g. --set threshold=0.45 (defaults: "
                         + " ".join(f"{k}={v}" for k, v in DEFAULT_SETTINGS.items()) + ")")
     g.add_argument("--style-defaults", action="store_true",
-                   help="ignore the command-line defaults above (--detail 0.5 and the --set "
-                        "defaults) and use each style's own defaults (see --list-styles)")
+                   help="ignore the command-line defaults above (--detail 1, ink 0.5, and the "
+                        "--set defaults) and use each style's own defaults (see --list-styles)")
     g.add_argument("--invert", action="store_true",
                    help="flip tonal styles (ink where the subject is dark)")
 
@@ -150,8 +154,8 @@ def parse_args(argv=None):
     g.add_argument("--sticker", action=argparse.BooleanOptionalAction, default=False,
                    help="also write a WhatsApp sticker (.webp, 512x512, animated for GIFs and "
                         "videos) (default: off)")
-    g.add_argument("--preview", action=argparse.BooleanOptionalAction, default=True,
-                   help="write _preview.png contact sheet (default: on)")
+    g.add_argument("--preview", action=argparse.BooleanOptionalAction, default=False,
+                   help="write _preview.png contact sheet (default: off)")
     g.add_argument("--debug", action="store_true", help="save mask and cut-out per photo")
 
     g = ap.add_argument_group("detection")
@@ -174,8 +178,8 @@ def parse_args(argv=None):
                               "written in the input's format, plus a transparent GIF for videos; "
                               "no --refine, --svg or --debug)")
     g.add_argument("--anim-size", type=int, default=720,
-                   help="long side in px, for processing and output (instead of --work-size "
-                        "and --size) (default: 720)")
+                   help="long side in px (with --square, the square's side), for processing "
+                        "and output (instead of --work-size and --size) (default: 720)")
     g.add_argument("--fps", type=float, default=12,
                    help="draw at most this many frames per second, dropping the rest "
                         "(0 = every frame) (default: 12)")
@@ -195,6 +199,9 @@ def parse_args(argv=None):
     g.add_argument("--mp4", action="store_true",
                    help="also write an MP4 (on the background) for GIF and MOV inputs; MP4 "
                         "inputs always get one")
+    g.add_argument("--square", action="store_true",
+                   help="crop the clip to a square (its short side) that slides along the long "
+                        "side to keep the subjects' faces in frame")
 
     g = ap.add_argument_group("refine (optional final pass through an image-editing model)")
     g.add_argument("--refine", choices=refine.MODES, default="off",
@@ -223,7 +230,7 @@ def parse_args(argv=None):
     return ap.parse_args(argv)
 
 
-def parse_overrides(args) -> dict:
+def parse_overrides(args, name: str) -> dict:
     out = {} if args.style_defaults else dict(DEFAULT_SETTINGS)
     for item in args.set:
         key, _, value = item.partition("=")
@@ -234,7 +241,7 @@ def parse_overrides(args) -> dict:
     if args.detail is not None:
         out["detail"] = args.detail
     elif not args.style_defaults:
-        out["detail"] = DEFAULT_DETAIL
+        out["detail"] = STYLE_DETAIL.get(name, DEFAULT_DETAIL)
     if args.weight is not None:
         out["weight"] = args.weight
     if args.invert:
@@ -336,7 +343,7 @@ def draw_subjects(args, photo: str, rgb, subjects, names, ids, overrides, refine
         for name in names:
             t = time.perf_counter()
             inks[name] |= styles.render(name, rgb, s.mask, args.color == "white",
-                                        {**overrides, "subject": s.kind})
+                                        {**overrides[name], "subject": s.kind})
             secs[name] += time.perf_counter() - t
 
     for name in names:
@@ -366,7 +373,8 @@ def draw_animation(args, path: Path, seg, names, ids, overrides, previews: list)
     """Draw a GIF or video frame by frame on its whole frame, one animation per style in the
     input's format plus a GIF for videos and (with --sticker) an animated WhatsApp sticker;
     returns files written (0 if no subject was found in any frame)."""
-    frames, durations = video.read_frames(path, args.anim_size, args.fps, args.max_frames)
+    frames, durations = video.read_frames(path, args.anim_size, args.fps, args.max_frames,
+                                          short_side=args.square)
     if not frames:
         raise ValueError("no frames")
     h, w = frames[0].shape[:2]
@@ -402,6 +410,23 @@ def draw_animation(args, path: Path, seg, names, ids, overrides, previews: list)
                 log.info("  steadied in %.1fs", time.perf_counter() - t)
             free_device_memory()
 
+        if args.square and h != w:
+            t = time.perf_counter()
+            finder = tattoo.get_finder(seg.device)
+            centers = []
+            for rgb, subjects in zip(frames, found):
+                centers.append([c for s in subjects
+                                if (c := square.face_center(finder, rgb, s)) is not None])
+                free_device_memory()
+            fps = 1000 * len(frames) / max(sum(durations), 1)
+            starts = square.offsets(centers, (h, w), square.SMOOTH_SECONDS * fps)
+            frames = [square.crop(rgb, at) for rgb, at in zip(frames, starts)]
+            found = [[c for s in subjects if (c := square.crop_subject(s, at)).mask.any()]
+                     for subjects, at in zip(found, starts)]
+            h = w = min(h, w)
+            log.info("  square: followed faces in %d of %d frame(s) (%.1fs)",
+                     sum(map(bool, centers)), len(frames), time.perf_counter() - t)
+
         for i, (rgb, subjects) in enumerate(zip(frames, found), 1):
             t = time.perf_counter()
             mask = np.zeros((h, w), bool)
@@ -410,7 +435,7 @@ def draw_animation(args, path: Path, seg, names, ids, overrides, previews: list)
                 mask |= s.mask
                 for name in names:
                     frame[name] |= styles.render(name, rgb, s.mask, args.color == "white",
-                                                 {**overrides, "subject": s.kind})
+                                                 {**overrides[name], "subject": s.kind})
             for name in names:
                 ink = frame[name]
                 if args.outline:
@@ -503,6 +528,8 @@ def main(argv=None) -> int:
     if args.list_styles:
         list_styles()
         return 0
+    if not args.inputs:
+        sys.exit("lineart.py: give one or more photos, GIFs, videos or folders (see --help)")
 
     groups = {"all": list(styles.STYLES), "tattoo": tattoo.NAMES}
     names = [n for s in args.style for n in groups.get(s, [s])]
@@ -511,15 +538,16 @@ def main(argv=None) -> int:
         sys.exit(f"Unknown style(s): {unknown}. Use --list-styles.")
 
     setup_logging(args.out)
-    overrides = parse_overrides(args)
+    overrides = {n: parse_overrides(args, n) for n in names}
     files = collect_images(args.inputs)
     if args.sample:
         files = sample_images(files, args.sample, args.sample_seed)
-    log.info("%d photo(s), style(s): %s, overrides: %s", len(files), names, overrides or "none")
-    ids = {n: settings_id(n, overrides, args) for n in names}
+    log.info("%d photo(s), style(s): %s, overrides: %s", len(files), names,
+             parse_overrides(args, "") or "none")
+    ids = {n: settings_id(n, overrides[n], args) for n in names}
     for n, (tag, text) in ids.items():
         log.info("  %s -> <photo>__%s.png  %s", n, tag, text)
-    anim_ids = {n: settings_id(n, overrides, args, animated=True) for n in names}
+    anim_ids = {n: settings_id(n, overrides[n], args, animated=True) for n in names}
     anims = [f for f in files if video.is_animation(f)]
     if anims:
         for n, (tag, text) in anim_ids.items():

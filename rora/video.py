@@ -36,18 +36,19 @@ def _video_frames(path: Path):
         cap.release()
 
 
-def _fit(rgb: np.ndarray, size: int) -> np.ndarray:
-    f = size / max(rgb.shape[:2])
+def _fit(rgb: np.ndarray, size: int, short_side: bool = False) -> np.ndarray:
+    f = size / (min if short_side else max)(rgb.shape[:2])
     if f == 1:
         return rgb
     return cv2.resize(rgb, None, fx=f, fy=f,
                       interpolation=cv2.INTER_AREA if f < 1 else cv2.INTER_CUBIC)
 
 
-def read_frames(path: Path, size: int, fps: float = 0,
-                max_frames: int = 0) -> tuple[list[np.ndarray], list[int]]:
-    """RGB frames scaled so the long side is `size` px, and how long each shows (ms). Keeps
-    at most `fps` frames per second (0 = all) and the first `max_frames` (0 = all)."""
+def read_frames(path: Path, size: int, fps: float = 0, max_frames: int = 0,
+                short_side: bool = False) -> tuple[list[np.ndarray], list[int]]:
+    """RGB frames scaled so the long side (or, with `short_side`, the short side) is `size`
+    px, and how long each shows (ms). Keeps at most `fps` frames per second (0 = all) and the
+    first `max_frames` (0 = all)."""
     frames = _gif_frames(path) if path.suffix.lower() == ".gif" else _video_frames(path)
     step = 1000 / fps if fps else 0
     kept, starts, t = [], [], 0.0
@@ -55,7 +56,7 @@ def read_frames(path: Path, size: int, fps: float = 0,
         if t + 0.5 >= len(starts) * step:
             if max_frames and len(starts) == max_frames:
                 break
-            kept.append(_fit(rgb, size))
+            kept.append(_fit(rgb, size, short_side))
             starts.append(t)
         t += ms
     durations = np.diff([*starts, t]).round().astype(int).tolist()

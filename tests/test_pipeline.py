@@ -113,7 +113,7 @@ class PipelineTestCase(unittest.TestCase):
             if "--sticker" in opts:
                 with Image.open(png.with_suffix(".webp")) as im:
                     self.assertEqual((im.format, im.size), ("WEBP", (512, 512)))
-        self.assertEqual((out / "_preview.png").exists(), "--no-preview" not in opts)
+        self.assertEqual((out / "_preview.png").exists(), "--preview" in opts)
         self.assertTrue((out / "run.log").exists())
 
     def check_clip(self, style: str, ext: str, *opts: str, frames: int = 2):
@@ -123,6 +123,8 @@ class PipelineTestCase(unittest.TestCase):
         self.assertEqual(len(gifs), 1, f"expected one {style} .gif in {out}")
         with Image.open(gifs[0]) as im:
             self.assertEqual(im.n_frames, frames)
+            if "--square" in opts:
+                self.assertEqual(im.size, (ANIM_SIZE, ANIM_SIZE))
             self.assertEqual(max(im.size), ANIM_SIZE)
             opaque = "--opaque-background" in opts
             self.assertEqual("transparency" in im.info, not opaque)
@@ -150,6 +152,8 @@ class PipelineTestCase(unittest.TestCase):
             cap = cv2.VideoCapture(str(files[0]))
             size = (cap.get(cv2.CAP_PROP_FRAME_WIDTH), cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
             self.assertEqual(max(size), ANIM_SIZE)
+            if "--square" in opts:
+                self.assertEqual(size, (ANIM_SIZE, ANIM_SIZE))
             bg = np.array(export.BACKGROUNDS[color][::-1], np.int16)
             n = inked = 0
             while True:
@@ -170,7 +174,7 @@ class PipelineTestCase(unittest.TestCase):
                 self.assertEqual((im.format, im.size), ("WEBP", (512, 512)))
                 self.assertEqual(im.n_frames, frames)
                 self.assertTrue((np.asarray(im.convert("RGBA"))[..., 3] == 0).any())
-        self.assertEqual((out / "_preview.png").exists(), "--no-preview" not in opts)
+        self.assertEqual((out / "_preview.png").exists(), "--preview" in opts)
 
 
 class StyleTests(PipelineTestCase):
@@ -184,7 +188,7 @@ class StyleTests(PipelineTestCase):
         self.check_still("ink", ".jpeg", "--color", "black", "--weight", "3")
 
     def test_edges(self):
-        self.check_still("edges", ".png", "--detail", "0.2", "--antialias", "--no-preview")
+        self.check_still("edges", ".png", "--detail", "0.2", "--antialias", "--preview")
 
     def test_outline(self):
         self.check_still("outline", ".webp", "--outline", "3", "--subject", "auto")
@@ -203,7 +207,8 @@ class StyleTests(PipelineTestCase):
 
     # cartoony styles
     def test_cartoon(self):
-        self.check_clip("cartoon", ".mp4", "--color", "black", "--antialias", "--sticker")
+        self.check_clip("cartoon", ".mp4", "--color", "black", "--antialias", "--sticker",
+                        "--square")
 
     def test_comic(self):
         self.check_clip("comic", ".mov", "--subject", "dog", "--fps", "0", "--opaque-background",
@@ -214,10 +219,10 @@ class StyleTests(PipelineTestCase):
         self.check_still("woodcut", ".heic", "--detail", "0.8", "--pad", "0.1")
 
     def test_noir(self):
-        self.check_still("noir", ".jpg", "--style-defaults", "--no-preview")
+        self.check_still("noir", ".jpg", "--style-defaults", "--preview")
 
     def test_sketch(self):
-        self.check_clip("sketch", ".gif", "--color", "black", "--outline", "2", "--no-preview",
+        self.check_clip("sketch", ".gif", "--color", "black", "--outline", "2", "--preview",
                         "--no-sticker")
 
     # tattoo looks (slower: several models per subject)
@@ -248,6 +253,11 @@ class FileTypeTests(PipelineTestCase):
     def test_every_file_type_is_picked_up(self):
         found = {p.suffix for p in lineart.collect_images([self.tmp])}
         self.assertEqual(found, {*STILL_EXTS, ".gif", ".mp4", ".mov"})
+
+    def test_inputs_are_required(self):
+        with self.assertRaises(SystemExit) as e:
+            lineart.main([])
+        self.assertIn("give one or more", str(e.exception.code))
 
 
 if __name__ == "__main__":
