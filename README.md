@@ -14,9 +14,12 @@ one of that kind in its own image. GIFs and videos (MP4, MOV) work too, frame by
 
 <table align="center">
   <tr>
-    <td><img src="img/in/clip_preview.gif" alt="Two dogs playing in the snow" width="300"></td>
-    <td align="center"><b>&rarr;</b></td>
-    <td><img src="img/out/clip__edges_d0.5_w2_obg.gif" alt="The same clip drawn as white edge lines on a dark background" width="300"></td>
+    <td><img src="img/in/clip_preview.gif" width="200"></td>
+    <td><img src="img/out/clip__edges_d0.5_w2_obg.gif" width="200"></td>
+  </tr>
+  <tr>
+    <td><img src="img/out/clip__stencil_d0.5_w2_obg.gif" width="200"></td>
+    <td><img src="img/out/clip__stipple_d0.5_w2_obg.gif" width="200"></td>
   </tr>
 </table>
 
