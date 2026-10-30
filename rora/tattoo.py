@@ -77,7 +77,8 @@ def get_strokes(rgb, mask, p):
         _cache["maps"] = edgemaps.candidate_maps(rgb, mask, device)
 
     face = None
-    if p["features"]:
+    # a face is looked for by kind, so --whole-frame (no kind) goes without
+    if p["features"] and kind in features.HEAD_QUERIES:
         if "face" not in _cache:
             _cache["face"] = get_finder(device).find_features(rgb, mask, kind)
             if _cache["face"] is not None:
@@ -115,6 +116,8 @@ def get_strokes(rgb, mask, p):
             log.info("  form lines: %d from depth", len(form))
             inner = form + inner  # listed first so ties in duplicate removal favour form lines
         inner, outline, blobs = cleanup.refine(inner, outline, blobs, mask, q["freedom"])
+        if mask.all():  # --whole-frame: the mask's edge is the photo's border, not an outline
+            outline = []
         if face is not None:
             inner = cleanup.clip_paths(inner, ~zone, 0.02 * size)  # smoothing may drift into features
             feature_lines, feature_fills = facedraw.draw_face(face, rgb, mask, size, bool(q["nose_solid"]),

@@ -16,6 +16,7 @@ register_heif_opener()  # lets Pillow open .heic photos
 
 COCO_KINDS = {0: "person", 15: "cat", 16: "dog"}
 SUBJECTS = ("all", "auto", *COCO_KINDS.values())
+FRAME = "frame"  # the kind of the one subject --whole-frame draws
 
 
 @dataclass
@@ -23,7 +24,13 @@ class Subject:
     mask: np.ndarray  # bool HxW
     box: tuple[int, int, int, int]
     score: float
-    kind: str  # "person", "cat" or "dog"
+    kind: str  # "person", "cat" or "dog", or FRAME
+
+
+def whole_frame(rgb: np.ndarray) -> list[Subject]:
+    """The whole image as the only subject, for --whole-frame (no detection or segmentation)."""
+    h, w = rgb.shape[:2]
+    return [Subject(np.ones((h, w), bool), (0, 0, w, h), 1.0, FRAME)]
 
 
 def pick_device(requested: str = "auto") -> str:
@@ -152,6 +159,8 @@ class Segmenter:
 
 def describe(kinds: list[str]) -> str:
     """Plain-English list of subjects, e.g. 'a dog', 'two people and a cat'."""
+    if FRAME in kinds:
+        return "the whole frame"
     counts = {k: kinds.count(k) for k in dict.fromkeys(kinds)}
     plural = {"person": "people", "cat": "cats", "dog": "dogs"}
     words = {1: "a", 2: "two", 3: "three", 4: "four", 5: "five"}

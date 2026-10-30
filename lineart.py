@@ -18,7 +18,7 @@ import numpy as np
 
 from rora import export, refine, square, sticker, styles, tattoo, track, video
 from rora.segment import (COCO_KINDS, SUBJECTS, Segmenter, describe, free_device_memory,
-                          load_image)
+                          load_image, pick_device, whole_frame)
 
 log = logging.getLogger("lineart")
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".heic", ".webp", ".tif", ".tiff"}
@@ -35,10 +35,13 @@ STYLE_DETAIL = {"ink": 0.5}
 OUTPUT_OPTIONS = ("color", "size", "dpi", "pad", "min_speck", "outline", "antialias",
                   "work_size", "min_conf", "detector", "segmenter", "subject",
                   "anim_size", "fps", "max_frames", "steady", "halo", "opaque_background",
-                  "square")
+                  "square", "whole_frame")
 STILL_ONLY = ("size", "dpi", "pad", "work_size")
 ANIMATION_ONLY = ("anim_size", "fps", "max_frames", "steady", "halo", "opaque_background",
                   "square")
+# options --whole-frame ignores (no detection, segmentation or cropping to the subject)
+NOT_WHOLE_FRAME = ("min_conf", "detector", "segmenter", "subject", "subject_conf", "steady",
+                   "pad")
 
 # short names used in output file names (README has the same table)
 ABBREV = {
@@ -59,6 +62,7 @@ ABBREV = {
     "outline": "ol", "antialias": "aa", "work_size": "ws", "min_conf": "mc",
     "detector": "det", "segmenter": "seg", "anim_size": "as", "fps": "fps", "max_frames": "mf",
     "steady": "sty", "halo": "hl", "opaque_background": "obg", "square": "sq",
+    "whole_frame": "wf",
     # refine pass (only in refined files' names)
     "refine": "rf", "refine_seed": "rsd", "refine_quantize": "rq", "refine_prompt": "rp",
     "refine_model": "rmd",
@@ -88,6 +92,8 @@ def settings_id(name: str, overrides: dict, args, animated: bool = False) -> tup
     used = {k: v for k, v in {**style.defaults, **overrides}.items()
             if k in style.defaults or k == "invert"}
     unused = STILL_ONLY if animated else ANIMATION_ONLY
+    if args.whole_frame:
+        unused += NOT_WHOLE_FRAME
     out_opts = {k: getattr(args, k) for k in OUTPUT_OPTIONS if k not in unused}
     cli_defaults = vars(parse_args([]))
     baseline = {**style.defaults, **{k: v for k, v in DEFAULT_SETTINGS.items() if k in style.defaults}}
@@ -170,6 +176,11 @@ def parse_args(argv=None):
     g.add_argument("--subject-conf", type=float, default=0.8,
                    help="confidence needed to draw subjects besides the main one, which is "
                         "always drawn (default: 0.8)")
+    g.add_argument("--whole-frame", action="store_true",
+                   help="skip detection and segmentation and draw the entire image or video "
+                        "frame, uncropped (no subject needed; --subject, --subject-conf, "
+                        "--min-conf, --detector, --segmenter, --steady, --pad and --refine are "
+                        "ignored, and the tattoo looks don't look for a face) (default: off)")
     g.add_argument("--device", default="auto", help="auto | mps | cuda | cpu")
     g.add_argument("--detector", default="yolo11x.pt")
     g.add_argument("--segmenter", default="sam2.1_b.pt")
@@ -352,7 +363,10 @@ def draw_subjects(args, photo: str, rgb, subjects, names, ids, overrides, refine
         if args.outline:
             ink |= styles.silhouette(mask, args.outline)
         ink = export.despeckle(ink, args.min_speck)
-        out = export.crop_and_resize(ink, mask, args.pad, args.size)
+        if args.whole_frame:
+            out = export.resize(ink, args.size)
+        else:
+            out = export.crop_and_resize(ink, mask, args.pad, args.size)
 
         tag, settings = ids[name]
         settings = json.dumps({**json.loads(settings), "subjects": describe(kinds)},
@@ -386,20 +400,23 @@ def draw_animation(args, path: Path, seg, names, ids, overrides, previews: list)
     level = rora_log.level
     rora_log.setLevel(logging.WARNING)  # the per-frame steps' log lines would repeat every frame
     try:
-        found = []
-        for i, rgb in enumerate(frames, 1):
-            t = time.perf_counter()
-            found.append(seg.find_subjects(rgb, args.subject, args.subject_conf))
-            log.info("  frame %d/%d: %s (%.1fs)", i, len(frames),
-                     describe([s.kind for s in found[-1]]) if found[-1] else "nothing found",
-                     time.perf_counter() - t)
-            free_device_memory()
+        if args.whole_frame:
+            found = [whole_frame(rgb) for rgb in frames]
+        else:
+            found = []
+            for i, rgb in enumerate(frames, 1):
+                t = time.perf_counter()
+                found.append(seg.find_subjects(rgb, args.subject, args.subject_conf))
+                log.info("  frame %d/%d: %s (%.1fs)", i, len(frames),
+                         describe([s.kind for s in found[-1]]) if found[-1] else "nothing found",
+                         time.perf_counter() - t)
+                free_device_memory()
         if not any(found):
             log.warning("  no %s found in any frame, skipping", args.subject
                         if args.subject in COCO_KINDS.values() else "person, cat or dog")
             return 0
 
-        if args.steady < 1:
+        if args.steady < 1 and not args.whole_frame:
             t = time.perf_counter()
             found, filled = track.steady(found, lambda i, boxes: seg.segment(frames[i], boxes),
                                          args.steady)
@@ -412,20 +429,26 @@ def draw_animation(args, path: Path, seg, names, ids, overrides, previews: list)
 
         if args.square and h != w:
             t = time.perf_counter()
-            finder = tattoo.get_finder(seg.device)
-            centers = []
-            for rgb, subjects in zip(frames, found):
-                centers.append([c for s in subjects
-                                if (c := square.face_center(finder, rgb, s)) is not None])
-                free_device_memory()
+            if args.whole_frame:  # no faces to follow: the square stays in the middle
+                centers = [[] for _ in frames]
+            else:
+                finder = tattoo.get_finder(seg.device)
+                centers = []
+                for rgb, subjects in zip(frames, found):
+                    centers.append([c for s in subjects
+                                    if (c := square.face_center(finder, rgb, s)) is not None])
+                    free_device_memory()
             fps = 1000 * len(frames) / max(sum(durations), 1)
             starts = square.offsets(centers, (h, w), square.SMOOTH_SECONDS * fps)
             frames = [square.crop(rgb, at) for rgb, at in zip(frames, starts)]
             found = [[c for s in subjects if (c := square.crop_subject(s, at)).mask.any()]
                      for subjects, at in zip(found, starts)]
             h = w = min(h, w)
-            log.info("  square: followed faces in %d of %d frame(s) (%.1fs)",
-                     sum(map(bool, centers)), len(frames), time.perf_counter() - t)
+            if args.whole_frame:
+                log.info("  square: centred")
+            else:
+                log.info("  square: followed faces in %d of %d frame(s) (%.1fs)",
+                         sum(map(bool, centers)), len(frames), time.perf_counter() - t)
 
         for i, (rgb, subjects) in enumerate(zip(frames, found), 1):
             t = time.perf_counter()
@@ -446,7 +469,7 @@ def draw_animation(args, path: Path, seg, names, ids, overrides, previews: list)
     finally:
         rora_log.setLevel(level)
     suffix = path.suffix.lower()
-    sub_tag = "" if args.subject == "all" else f"_{args.subject}"
+    sub_tag = "" if args.subject == "all" or args.whole_frame else f"_{args.subject}"
     written = 0
     for name in names:
         tag, settings = ids[name]
@@ -560,6 +583,16 @@ def main(argv=None) -> int:
     ignored = sorted({s.partition("=")[0] for s in args.set} - used_keys)
     if ignored:
         log.warning("  --set %s not used by style(s) %s", ", ".join(ignored), names)
+    if args.whole_frame:
+        cli_defaults = vars(parse_args([]))
+        unused = [k for k in NOT_WHOLE_FRAME if getattr(args, k) != cli_defaults[k]]
+        if args.refine != "off":
+            unused.append("refine")
+            args.refine = "off"
+        log.info("Whole frame: no detection, every image and frame is drawn whole")
+        if unused:
+            log.warning("  --whole-frame ignores %s",
+                        ", ".join("--" + k.replace("_", "-") for k in unused))
     if not files:
         return 1
 
@@ -580,8 +613,9 @@ def main(argv=None) -> int:
         log.info("Refine: %s with %s via %s", args.refine,
                  refine.MODELS[args.refine_model].name, backend)
 
-    seg = Segmenter(args.device, args.detector, args.segmenter, args.min_conf)
-    device = seg.device
+    seg = None if args.whole_frame else Segmenter(args.device, args.detector, args.segmenter,
+                                                  args.min_conf)
+    device = seg.device if seg else pick_device(args.device)
     previews, written, skipped = [], 0, []
     refine_jobs = [] if refine_opts else None
     start = time.perf_counter()
@@ -597,14 +631,18 @@ def main(argv=None) -> int:
                 continue  # draw_animation frees device memory after every frame
 
             rgb = load_image(path, args.work_size)
-            subjects = seg.find_subjects(rgb, args.subject, args.subject_conf)
+            if args.whole_frame:
+                subjects = whole_frame(rgb)
+            else:
+                subjects = seg.find_subjects(rgb, args.subject, args.subject_conf)
             if not subjects:
                 log.warning("  no %s found, skipping", args.subject
                             if args.subject in COCO_KINDS.values() else "person, cat or dog")
                 skipped.append(path.name)
                 continue
 
-            for sub_tag, group in subject_groups(subjects, args.subject):
+            for sub_tag, group in subject_groups(subjects, "all" if args.whole_frame
+                                                 else args.subject):
                 log.info("  drawing %s%s", describe([s.kind for s in group]),
                          f" -> {path.stem}{sub_tag}" if sub_tag else "")
                 written += draw_subjects(args, path.stem + sub_tag, rgb, group, names, ids,

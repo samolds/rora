@@ -26,7 +26,11 @@ def crop_and_resize(ink: np.ndarray, mask: np.ndarray, pad: float, size: int) ->
     ys, xs = np.nonzero(ink) if ink.any() else np.nonzero(mask)
     ink = ink[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
     p = int(pad * max(ink.shape))
-    ink = np.pad(ink, p)
+    return resize(np.pad(ink, p), size)
+
+
+def resize(ink: np.ndarray, size: int) -> np.ndarray:
+    """Scale so the long side is `size` px (0 = keep)."""
     if size:
         f = size / max(ink.shape)
         resized = cv2.resize(ink.astype(np.float32), None, fx=f, fy=f, interpolation=cv2.INTER_LINEAR)

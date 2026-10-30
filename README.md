@@ -8,18 +8,35 @@ one of several styles, including minimalist tattoo-style line art. By default ev
 detected with high confidence is drawn, all together in one image; `--subject auto` draws only
 the main one (the biggest, most central), and `--subject dog` (or `cat`, `person`) draws each
 one of that kind in its own image. GIFs and videos (MP4, MOV) work too, frame by frame (see
-[GIFs and videos](#gifs-and-videos)).
+[GIFs and videos](#gifs-and-videos)), and `--whole-frame` skips detection and draws the
+entire picture (see [Whole frame](#whole-frame-no-subject-detection)).
 
 ## Example
 
 <table align="center">
   <tr>
-    <td><img src="img/in/clip_preview.gif" width="200"></td>
-    <td><img src="img/out/clip__edges_d0.5_w2_obg.gif" width="200"></td>
+    <td>
+        <img src="img/in/clip_preview.gif" width="200">
+        <br />
+        input
+    </td>
+    <td>
+        <img src="img/out/clip__edges_d0.5_w2_obg.gif" width="200">
+        <br />
+        <code>--style edges</code>
+    </td>
   </tr>
   <tr>
-    <td><img src="img/out/clip__stencil_d0.5_w2_obg.gif" width="200"></td>
-    <td><img src="img/out/clip__stipple_d0.5_w2_obg.gif" width="200"></td>
+    <td>
+        <img src="img/out/clip__stencil_d0.5_w2_obg.gif" width="200">
+        <br />
+        <code>--style stencil</code>
+    </td>
+    <td>
+        <img src="img/out/clip__stipple_d0.5_w2_obg.gif" width="200">
+        <br />
+        <code>--style stipple</code>
+    </td>
   </tr>
 </table>
 
@@ -92,7 +109,7 @@ The full settings are also embedded in each PNG (text field `dog_lineart_setting
 | | | `ps` | passes | `hl` | --halo |
 | | | `wb` | wobble | `obg` | --opaque-background |
 | | | `gp` | gaps | `sq` | --square |
-| | | `gs` | gap_size | | |
+| | | `gs` | gap_size | `wf` | --whole-frame |
 
 On/off settings appear as just the short name when on (e.g. `aa`), or with `0` when off.
 </details>
@@ -162,6 +179,28 @@ Useful options: `--detail 0..1` (how much is drawn, default 1; `ink` 0.5), `--we
 least `--subject-conf` 0.8 confidence, plus the main one, together in one image; `auto`: only
 the main subject; a kind: each one of that kind, in its own image).
 Run `python lineart.py --help` for the full list.
+
+### Whole frame (no subject detection)
+
+`--whole-frame` (off by default) skips finding and cutting out subjects: the entire photo, or
+every frame of a GIF or video, is drawn as it is, background and all, so it works on any
+picture, not just people, cats and dogs. The YOLO and SAM 2 models aren't loaded, and photos
+keep the frame's full size and shape (no cropping to the lines, no `--pad`). The name gets
+`_wf`.
+
+```sh
+python lineart.py img/in/1.jpg -s edges noir --whole-frame
+python lineart.py img/in/clip.mp4 -s stencil --whole-frame
+```
+
+- The options for finding subjects (`--subject`, `--subject-conf`, `--min-conf`,
+  `--detector`, `--segmenter`, `--steady`) and `--pad` are ignored, and so is `--refine`,
+  whose prompt and scoring are about the subject (the log says which were given).
+- With nothing to cut out there's no subject outline, so `--outline` and the outlines of
+  `outline`, `cartoon`, `comic`, `noir` (rim light) and the tattoo looks are left out.
+- The tattoo looks draw the scene's lines without looking for a face (there's no subject
+  kind to look for), so eyes, nose and mouth aren't drawn specially.
+- With `--square`, the square stays in the middle of the frame (there are no faces to follow).
 
 ### GIFs and videos
 

@@ -245,6 +245,36 @@ class StyleTests(PipelineTestCase):
         self.check_still("minimal", ".jpeg", "--set", "pupils=1", "--outline", "2")
 
 
+class WholeFrameTests(PipelineTestCase):
+    """--whole-frame: no detection, the entire image or frame is drawn, uncropped."""
+
+    def test_still_is_the_whole_frame(self):
+        self.check_still("edges", ".png", "--whole-frame", "--pad", "0.2", "--refine", "clean")
+        h, w = load_image(self.inputs[".png"], 800).shape[:2]
+        f = PHOTO_SIZE / max(h, w)
+        (png,) = (self.tmp / "out_edges").glob("*__edges_*.png")
+        self.assertIn("_wf", png.stem)
+        self.assertNotIn("pad", png.stem)  # --pad is ignored
+        self.assertNotIn("rf-", png.stem)  # so is --refine
+        with Image.open(png) as im:
+            self.assertAlmostEqual(im.width, w * f, delta=1)
+            self.assertAlmostEqual(im.height, h * f, delta=1)
+            settings = json.loads(im.text["dog_lineart_settings"])
+        self.assertTrue(settings["whole_frame"])
+        self.assertEqual(settings["subjects"], "the whole frame")
+
+    def test_tattoo_has_no_frame_outline(self):
+        self.check_still("minimal", ".jpg", "--whole-frame", "--set", "freedom=0")
+        (png,) = (self.tmp / "out_minimal").glob("*__minimal_*.png")
+        with Image.open(png) as im:
+            ink = np.asarray(im)[..., 3] > 0
+        for edge in (ink[:3], ink[-3:], ink[:, :3], ink[:, -3:]):
+            self.assertLess(edge.mean(), 0.2)
+
+    def test_clip(self):
+        self.check_clip("noir", ".mov", "--whole-frame", "--square", "--subject", "cat")
+
+
 class FileTypeTests(PipelineTestCase):
     def test_every_style_has_a_test(self):
         tested = {name[5:] for name in dir(StyleTests) if name.startswith("test_")}

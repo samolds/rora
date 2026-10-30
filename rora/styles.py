@@ -228,8 +228,11 @@ def noir(rgb, mask, p):
     a = np.deg2rad(p["light_angle"])
     shift = p["rim"] * s
     m = mask.astype(np.uint8)
+    # with --whole-frame the mask is the frame, which has no edge to light (no rim along the border)
+    border = cv2.BORDER_REPLICATE if mask.all() else cv2.BORDER_CONSTANT
     moved = cv2.warpAffine(m, np.float32([[1, 0, -np.cos(a) * shift],
-                                          [0, 1, -np.sin(a) * shift]]), m.shape[::-1])
+                                          [0, 1, -np.sin(a) * shift]]), m.shape[::-1],
+                           borderMode=border)
     rim = mask & ~moved.astype(bool)
     return (d > threshold) | rim
 
